@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using XRay.Content.Internal.Biff;
+using XRay.Content.Internal.Excel;
 
 namespace XRay.Content.Internal.Ooxml;
 
@@ -28,17 +29,29 @@ public static class XlsbReader
     private const int BrtFmlaError = 0x000B;
     private const int BrtSstItem = 0x0013;
     private const int BrtBundleSh = 0x009C;
+    private const int BrtFmt = 0x002C;
+    private const int BrtXF = 0x002F;
+    private const int BrtBeginCellXFs = 0x0269;
+    private const int BrtEndCellXFs = 0x026A;
 
-    public static ExcelWorkbook Read(ReadOnlySpan<byte> content)
+    /// <summary>Reads a workbook's sheets and metadata.</summary>
+    /// <param name="content">The OOXML package.</param>
+    /// <param name="numberFormats">
+    /// Render numeric cells through <c>styles.bin</c>, so a cell reads the way Excel shows it.
+    /// False keeps the bare value calamine hands the Rust original — see "Deviation: formatted
+    /// Excel cells" in <c>CLAUDE.md</c>.
+    /// </param>
+    public static ExcelWorkbook Read(ReadOnlySpan<byte> content, bool numberFormats = true)
     {
         using var pkg = new OoxmlPackage(content);
         var wb = new ExcelWorkbook();
 
         var shared = ReadSharedStrings(pkg);
         var sheetRefs = ReadSheetOrder(pkg);
+        var formats = numberFormats ? ReadCellFormats(pkg) : ExcelCellFormats.Empty;
 
         foreach (var (name, target) in sheetRefs)
-            wb.Sheets.Add(ProcessSheet(pkg, name, target, shared));
+            wb.Sheets.Add(ProcessSheet(pkg, name, target, shared, formats));
 
         // Mirrors read_excel_bytes ".xlsb": no office metadata, just sheet_count/sheet_names.
         var names = sheetRefs.Select(s => s.Name).ToList();
@@ -99,7 +112,8 @@ public static class XlsbReader
     }
 
     // ── worksheet part → ExcelSheet ─────────────────────────────────────────────
-    private static ExcelSheet ProcessSheet(OoxmlPackage pkg, string name, string target, List<string> shared)
+    private static ExcelSheet ProcessSheet(
+        OoxmlPackage pkg, string name, string target, List<string> shared, ExcelCellFormats formats)
     {
         var cellsByPos = new Dictionary<(int Row, int Col), string>();
         int rowMin = int.MaxValue, rowMax = -1, colMin = int.MaxValue, colMax = -1;
@@ -118,13 +132,15 @@ public static class XlsbReader
                 if (id < BrtCellBlank || id > BrtFmlaError || data.Length < 8) continue;
 
                 int col = (int)U32(data, 0);
+                // Cell [MS-XLSB 2.5.9]: the column, then a 24-bit index into cellXfs.
+                int style = data[4] | (data[5] << 8) | (data[6] << 16);
                 string? value = id switch
                 {
-                    BrtCellRk when data.Length >= 12 => BiffReader.FormatNumber(BiffReader.RkToDouble(U32(data, 8))),
+                    BrtCellRk when data.Length >= 12 => Render(formats, style, BiffReader.RkToDouble(U32(data, 8))),
                     BrtCellError or BrtFmlaError when data.Length >= 9 => $"#ERR: {data[8]}",
                     BrtCellBool or BrtFmlaBool when data.Length >= 9 => data[8] != 0 ? "true" : "false",
                     BrtCellReal or BrtFmlaNum when data.Length >= 16 =>
-                        BiffReader.FormatNumber(BitConverter.Int64BitsToDouble((long)U64(data, 8))),
+                        Render(formats, style, BitConverter.Int64BitsToDouble((long)U64(data, 8))),
                     BrtCellSt or BrtFmlaString => ReadStringAt(data, 8),
                     BrtCellIsst when data.Length >= 12 && U32(data, 8) < (uint)shared.Count => shared[(int)U32(data, 8)],
                     _ => null,
@@ -152,6 +168,52 @@ public static class XlsbReader
             grid.Add(rowCells);
         }
         return new ExcelSheet { Name = name, Markdown = XlsxReader.GenerateMarkdown(name, grid), TableCells = grid };
+    }
+
+    /// <summary>
+    /// A numeric cell's text: what its format says, and the bare value where the format says
+    /// nothing this renders.
+    /// </summary>
+    private static string Render(ExcelCellFormats formats, int style, double value) =>
+        formats.Render(style, value) ?? BiffReader.FormatNumber(value);
+
+    // ── styles.bin: BrtFmt + the cellXfs block ──────────────────────────────────
+    /// <summary>
+    /// The workbook's number formats and the cell formats that cite them.
+    /// </summary>
+    /// <remarks>
+    /// Only the <c>cellXfs</c> block counts: a cell's style index addresses that list, and the
+    /// <c>cellStyleXfs</c> block written before it holds the same record id, so taking every
+    /// <c>BrtXF</c> would shift every index. The BIFF8 reader has no such split, which is why
+    /// it can take them all.
+    /// </remarks>
+    private static ExcelCellFormats ReadCellFormats(OoxmlPackage pkg)
+    {
+        var formats = new ExcelCellFormats();
+        var bin = pkg.ReadBytes("xl/styles.bin");
+        if (bin is null) return formats;
+
+        bool inCellXfs = false;
+        foreach (var (id, data) in Records(bin))
+        {
+            switch (id)
+            {
+                case BrtBeginCellXFs: inCellXfs = true; break;
+                case BrtEndCellXFs: inCellXfs = false; break;
+                case BrtFmt when data.Length >= 6:
+                {
+                    // BrtFmt [MS-XLSB 2.4.660]: the id, then the code as an XLWideString.
+                    int pos = 2;
+                    if (ReadString(data, ref pos) is { } code) formats.AddCode(data[0] | (data[1] << 8), code);
+                    break;
+                }
+                case BrtXF when inCellXfs && data.Length >= 4:
+                    // BrtXF [MS-XLSB 2.4.836]: the parent style index, then the number format.
+                    formats.AddCellFormat(data[2] | (data[3] << 8));
+                    break;
+            }
+        }
+        return formats;
     }
 
     // ── BIFF12 record framing ────────────────────────────────────────────────────

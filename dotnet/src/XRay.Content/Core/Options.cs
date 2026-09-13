@@ -56,6 +56,20 @@ public sealed class XRayOptions
     public bool SourceCodeDetection { get; init; } = true;
 
     /// <summary>
+    /// Render a spreadsheet's numeric cells through their number format, so a cell comes out
+    /// the way the spreadsheet shows it — <c>3.2%</c>, <c>$31,200</c>, <c>1/1/2008</c> — rather
+    /// than as the bare value behind it.
+    /// </summary>
+    /// <remarks>
+    /// On by default, and a deviation from upstream rather than a port of one: calamine hands
+    /// the Rust side an <c>f64</c> and it prints that, so a golden generated from upstream shows
+    /// the unformatted number. Turn this off — or set <c>XRAY_EXCEL_NUMBER_FORMATS=0</c> for a
+    /// harness — to compare against those goldens. See "Deviation: formatted Excel cells" in
+    /// <c>CLAUDE.md</c>.
+    /// </remarks>
+    public bool ExcelNumberFormats { get; init; } = true;
+
+    /// <summary>
     /// Fixed part of the per-document wall-clock guard for PDF extraction, in seconds. Also the
     /// floor: a one-page document still gets this long.
     /// </summary>
@@ -160,6 +174,8 @@ public sealed class XRayOptions
         {
             UsePortedPdfSpans =
                 Flag(Own("OXIDE_SPANS")) ?? defaults.UsePortedPdfSpans,
+            ExcelNumberFormats =
+                Flag(Own("EXCEL_NUMBER_FORMATS")) ?? defaults.ExcelNumberFormats,
             PdfBaseSeconds =
                 Integer(Own("PDF_BASE_SECONDS")) ?? defaults.PdfBaseSeconds,
             PdfMillisecondsPerPage =

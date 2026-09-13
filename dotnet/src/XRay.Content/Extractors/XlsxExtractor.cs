@@ -56,8 +56,8 @@ public sealed class XlsxExtractor : IExtractor
 
         bool officeMetadata = extension is ".xlsx" or ".xlsm" or ".xlam" or ".xltm";
         var workbook = extension == ".xlsb"
-            ? XlsbReader.Read(content)
-            : XlsxReader.Read(content, officeMetadata);
+            ? XlsbReader.Read(content, config.Options.ExcelNumberFormats)
+            : XlsxReader.Read(content, officeMetadata, config.Options.ExcelNumberFormats);
         TableBudget.ChargeSheets(SecurityBudget.FromConfig(config), workbook.Sheets.Select(sh => sh.TableCells));
         var doc = WorkbookToInternalDocument(workbook);
         doc.MimeType = mimeType;

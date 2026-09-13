@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using XRay.Content.Internal.Cfb;
+using XRay.Content.Internal.Excel;
 
 namespace XRay.Content.Internal.Biff;
 
@@ -44,17 +45,27 @@ internal static class BiffReader
     private const int FORMULA = 0x0006;
     private const int STRING_REC = 0x0207;
     private const int NAME = 0x0018;
+    private const int FORMAT = 0x041E;
+    private const int XF = 0x00E0;
     private const int EXTERNSHEET = 0x0017;
 
-    public static List<Sheet> ReadSheets(CompoundFile comp)
+    /// <summary>Reads every sheet's cell grid.</summary>
+    /// <param name="comp">The workbook's CFB container.</param>
+    /// <param name="numberFormats">
+    /// Render numeric cells through the workbook's FORMAT/XF records, so a cell reads the way
+    /// Excel shows it. False keeps the bare value calamine hands the Rust original — see
+    /// "Deviation: formatted Excel cells" in <c>CLAUDE.md</c>.
+    /// </param>
+    public static List<Sheet> ReadSheets(CompoundFile comp, bool numberFormats = true)
     {
         byte[] wb = comp.TryReadStream("/Workbook") ?? comp.TryReadStream("/Book")
             ?? throw new InvalidDataException("No Workbook/Book stream in XLS");
 
-        var (sst, sheets, ctx) = ParseGlobals(wb);
+        var (sst, sheets, ctx, formats) = ParseGlobals(wb);
+        if (!numberFormats) formats = ExcelCellFormats.Empty;
         foreach (var sheet in sheets)
         {
-            var (cells, formulas) = ParseSheet(wb, (int)sheet.StreamPos, sst, ctx);
+            var (cells, formulas) = ParseSheet(wb, (int)sheet.StreamPos, sst, ctx, formats);
             sheet.Cells = cells;
             sheet.Formulas = formulas;
         }
@@ -62,11 +73,13 @@ internal static class BiffReader
     }
 
     // ── globals substream: BoundSheet + SST ─────────────────────────────────────
-    private static (List<string> Sst, List<Sheet> Sheets, BiffFormulaContext Ctx) ParseGlobals(byte[] wb)
+    private static (List<string> Sst, List<Sheet> Sheets, BiffFormulaContext Ctx, ExcelCellFormats Formats)
+        ParseGlobals(byte[] wb)
     {
         var sheets = new List<Sheet>();
         var sst = new List<string>();
         var ctx = new BiffFormulaContext();
+        var formats = new ExcelCellFormats();
         int pos = 0;
         while (pos + 4 <= wb.Length)
         {
@@ -97,6 +110,23 @@ internal static class BiffReader
             else if (type == EXTERNSHEET)
             {
                 ParseExternSheet(wb, dataStart, len, ctx);
+                pos = dataStart + len;
+            }
+            else if (type == FORMAT)
+            {
+                // Format [MS-XLS 2.4.126]: the id cell formats cite, then the code itself —
+                // an XLUnicodeString in BIFF8 and a byte-counted one before it.
+                int ifmt = U16(wb, dataStart);
+                formats.AddCode(ifmt, ctx.IsPreBiff8
+                    ? ReadByteCountedString(wb, dataStart + 2)
+                    : ReadXlString(wb, dataStart + 2));
+                pos = dataStart + len;
+            }
+            else if (type == XF)
+            {
+                // XF [MS-XLS 2.4.353]: font index, then the number format id. Style and cell
+                // records share one list, which is what a cell's ixfe indexes into.
+                formats.AddCellFormat(U16(wb, dataStart + 2));
                 pos = dataStart + len;
             }
             else if (type == SST)
@@ -131,7 +161,7 @@ internal static class BiffReader
         {
             for (int i = 0; i < sheets.Count; i++) ctx.XtiItabFirst.Add((short)i);
         }
-        return (sst, sheets, ctx);
+        return (sst, sheets, ctx, formats);
     }
 
     /// <summary>BOF [MS-XLS 2.4.21]: the version word, with the document type as a tie-breaker.</summary>
@@ -252,7 +282,7 @@ internal static class BiffReader
 
     // ── worksheet substream: cells ──────────────────────────────────────────────
     private static (List<List<string>>? Cells, List<List<string>>? Formulas) ParseSheet(
-        byte[] wb, int start, List<string> sst, BiffFormulaContext ctx)
+        byte[] wb, int start, List<string> sst, BiffFormulaContext ctx, ExcelCellFormats formats)
     {
         var cells = new List<(int Row, int Col, string Val)>();
         var formulas = new List<(int Row, int Col, string Val)>();
@@ -304,7 +334,7 @@ internal static class BiffReader
                 {
                     int row = U16(wb, d), col = U16(wb, d + 2);
                     double v = RkToDouble(U32(wb, d + 6));
-                    AddCell(cells, row, col, FormatNumber(v));
+                    AddCell(cells, row, col, Render(formats, U16(wb, d + 4), v));
                     break;
                 }
                 case MULRK:
@@ -314,9 +344,9 @@ internal static class BiffReader
                     for (int i = 0; i < n; i++)
                     {
                         // Each RkRec is { ixfe:u16, rk:u32 }; the RK value sits after the ixfe.
-                        int off = d + 4 + i * 6 + 2;
-                        double v = RkToDouble(U32(wb, off));
-                        AddCell(cells, row, colFirst + i, FormatNumber(v));
+                        int rec = d + 4 + i * 6;
+                        double v = RkToDouble(U32(wb, rec + 2));
+                        AddCell(cells, row, colFirst + i, Render(formats, U16(wb, rec), v));
                     }
                     break;
                 }
@@ -324,7 +354,7 @@ internal static class BiffReader
                 {
                     int row = U16(wb, d), col = U16(wb, d + 2);
                     double v = BitConverter.Int64BitsToDouble((long)U64(wb, d + 6));
-                    AddCell(cells, row, col, FormatNumber(v));
+                    AddCell(cells, row, col, Render(formats, U16(wb, d + 4), v));
                     break;
                 }
                 case BOOLERR:
@@ -365,7 +395,7 @@ internal static class BiffReader
                     else
                     {
                         double v = BitConverter.Int64BitsToDouble((long)U64(wb, d + 6));
-                        AddCell(cells, row, col, FormatNumber(v));
+                        AddCell(cells, row, col, Render(formats, U16(wb, d + 4), v));
                     }
                     break;
                 }
@@ -374,6 +404,24 @@ internal static class BiffReader
         }
 
         return (BuildGrid(cells), BuildGrid(formulas));
+    }
+
+    /// <summary>
+    /// A numeric cell's text: what its format says, and the bare value where the format says
+    /// nothing this renders.
+    /// </summary>
+    private static string Render(ExcelCellFormats formats, int ixfe, double value) =>
+        formats.Render(ixfe, value) ?? FormatNumber(value);
+
+    /// <summary>Read a byte-counted, single-byte string, which is how BIFF5 writes a Format
+    /// record's code.</summary>
+    private static string ReadByteCountedString(byte[] b, int off)
+    {
+        if (off >= b.Length) return "";
+        int cch = b[off];
+        var sb = new StringBuilder(cch);
+        for (int i = 0; i < cch && off + 1 + i < b.Length; i++) sb.Append((char)b[off + 1 + i]);
+        return sb.ToString();
     }
 
     private static void AddCell(List<(int, int, string)> cells, int row, int col, string val)

@@ -26,8 +26,10 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="/" />
-    <!-- Packed at the root so the README's relative <img src="logo.png"> resolves both on
-         nuget.org and in the repository view. -->
+    <!-- The file PackageIcon above names; it has to be in the package for the icon to show.
+         The README does not point at this copy: nuget.org renders neither relative image
+         paths nor raw HTML, so it links the logo by absolute raw.githubusercontent.com URL
+         (an allow-listed domain) instead. -->
     <None Include="logo.png" Pack="true" PackagePath="/" />
   </ItemGroup>
 
