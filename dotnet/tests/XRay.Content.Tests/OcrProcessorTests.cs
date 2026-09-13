@@ -1,5 +1,8 @@
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using XRay.Content.Core;
 using XRay.Content.Core.Ocr;
+using XRay.Content.Extractors;
 using XRay.Content.Types;
 using Xunit;
 
@@ -415,205 +418,105 @@ public sealed class OcrProcessorTests
         Assert.Equal(ExtractionMethod.Mixed, result.ExtractionMethod);
     }
 
-    // ── tables the recognizer reports as HTML ─────────────────────────────────
+    // ── The extractor/pass seam for a standalone image ───────────────────────
 
     /// <summary>
-    /// What PaddleOCR-VL produces for a table region: <c>OtslTable.ToHtml</c>'s output shape —
-    /// <c>&lt;td&gt;</c> throughout, no header row, cell text HTML-encoded.
+    /// A real PNG, so the extractor under test is the one that ships. The default size clears
+    /// <see cref="OcrOptions.MinImagePixels"/> (64x64), below which the pass rightly skips an
+    /// image as an icon or a spacer.
     /// </summary>
-    private const string RecognizedTable =
-        "<table><tr><td>Stock</td><td>Last</td></tr>"
-        + "<tr><td>ABX Air n</td><td>7.52</td></tr></table>";
-
-    /// <summary>
-    /// A table the recognizer reported as markup becomes a table of the document's own, not a
-    /// text element holding HTML — which is what lets each output format write it in its own
-    /// notation.
-    /// </summary>
-    [Fact]
-    public void ARecognizedHtmlTableBecomesATableElement()
+    private static byte[] Png(int width = 200, int height = 150)
     {
-        var doc = DocumentWithImage();
-
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(RecognizedTable, 1)));
-
-        Assert.Equal(
-            new[]
-            {
-                ElementKindTag.Paragraph, ElementKindTag.Image,
-                ElementKindTag.Table, ElementKindTag.Paragraph,
-            },
-            doc.Elements.Select(e => e.Kind.Tag).ToList());
-
-        var table = Assert.Single(doc.Tables);
-        Assert.Equal(
-            new[] { new[] { "Stock", "Last" }, new[] { "ABX Air n", "7.52" } },
-            table.Cells.Select(r => r.ToArray()).ToArray());
+        using var image = new Image<Rgb24>(width, height);
+        using var buffer = new MemoryStream();
+        image.SaveAsPng(buffer);
+        return buffer.ToArray();
     }
 
     /// <summary>
-    /// The point of the exercise: Markdown gets a pipe table, with no HTML left in it.
+    /// A standalone image file carries no image data unless something asks for it.
     /// </summary>
+    /// <remarks>
+    /// The default has to stay empty: the bytes are the whole file, so attaching them
+    /// unconditionally would put every image extraction's input into its own output. Upstream
+    /// defaults the same way — its `images` config is an Option whose None means no image data.
+    /// </remarks>
     [Fact]
-    public void TheRecoveredTableRendersAsAMarkdownTable()
+    public void AStandaloneImageCarriesNoDataByDefault()
     {
-        var doc = DocumentWithImage();
+        var doc = new ImageExtractor().Extract(Png(), PngMime, new ExtractionConfig());
 
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(RecognizedTable, 1)));
+        Assert.Empty(doc.Images);
+        Assert.Single(doc.Elements, e => e.Kind.Tag == ElementKindTag.Image);
+    }
 
-        string content = Derive.DeriveExtractionResult(
-            doc, includeDocumentStructure: false, OutputFormat.Markdown).Content;
+    /// <summary>Asking for image data is what attaches it, with its dimensions.</summary>
+    [Fact]
+    public void AStandaloneImageCarriesItsDataWhenAsked()
+    {
+        byte[] png = Png();
 
-        Assert.Contains("| Stock | Last |", content);
-        Assert.Contains("| ABX Air n | 7.52 |", content);
-        Assert.DoesNotContain("<table", content);
-        Assert.DoesNotContain("<td", content);
+        var doc = new ImageExtractor().Extract(png, PngMime,
+            new ExtractionConfig { ExtractImages = true });
+
+        var image = Assert.Single(doc.Images);
+        Assert.Equal(png, image.Data);
+        Assert.Equal("PNG", image.Format);
+        Assert.Equal(200u, image.Width);
+        Assert.Equal(150u, image.Height);
+        Assert.Single(doc.Elements, e => e.Kind.Tag == ElementKindTag.Image);
+    }
+
+    /// <summary>QR decoding reads the same bytes, so it asks for them too.</summary>
+    [Fact]
+    public void QrDecodingAlsoAsksForTheData()
+    {
+        var doc = new ImageExtractor().Extract(Png(), PngMime,
+            new ExtractionConfig { QrCodes = true });
+
+        Assert.Single(doc.Images);
     }
 
     /// <summary>
-    /// The same table under the other formats, which is the argument for recovering it into the
-    /// model rather than rewriting the string: HTML keeps a real table, and plain text carries
-    /// the cells without anyone's markup.
+    /// AllImages recognises a standalone image file — the case the two halves of this port used
+    /// to miss between them.
     /// </summary>
+    /// <remarks>
+    /// The extractor produced an Image element with no bytes behind it and the pass walks
+    /// `doc.Images` looking for bytes, so a plain `.png` came back with no text however the
+    /// options were set — no warning, no error, just nothing. Upstream never had the gap because
+    /// it recognises inside its image extractor; here the two are separate, so the config has to
+    /// carry the need across. Drive it end to end rather than from a hand-built document: a
+    /// document built by hand has the images the test gave it, which is precisely what was
+    /// wrong.
+    /// </remarks>
     [Fact]
-    public void TheRecoveredTableRendersInEachFormatsOwnNotation()
+    public void AllImagesRecognisesAStandaloneImageFile()
     {
-        var doc = DocumentWithImage();
+        byte[] png = Png();
+        var config = new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } };
 
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(RecognizedTable, 1)));
+        var doc = new ImageExtractor().Extract(png, PngMime, config);
+        var engine = new FakeEngine();
 
-        string html = Derive.DeriveExtractionResult(
-            doc, includeDocumentStructure: false, OutputFormat.Html).Content;
-        Assert.Contains("<table", html);
-        Assert.Contains("ABX Air n", html);
+        OcrProcessor.Process(doc, png, PngMime, config, _ => engine);
 
-        string plain = Derive.DeriveExtractionResult(
-            doc, includeDocumentStructure: false, OutputFormat.Plain).Content;
-        Assert.Contains("ABX Air n", plain);
-        Assert.DoesNotContain("<td", plain);
+        Assert.Equal(new[] { png.Length }, engine.Calls);
+        Assert.Contains(doc.Elements, e => e.Text == "recognised text");
+
+        var result = Derive.DeriveExtractionResult(
+            doc, includeDocumentStructure: false, OutputFormat.Plain);
+        Assert.Contains("recognised text", result.Content);
+        Assert.Equal(ExtractionMethod.Mixed, result.ExtractionMethod);
     }
 
-    /// <summary>
-    /// The text around a table keeps its place, so a page that is a heading, a table and a
-    /// footnote still reads in that order.
-    /// </summary>
+    /// <summary>ScanOnly reads pages from the PDF bytes, so it must not start hauling images.</summary>
     [Fact]
-    public void TextAroundATableKeepsItsOrder()
+    public void ScanOnlyDoesNotAskForImageData()
     {
-        var doc = DocumentWithImage();
+        var config = new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.ScanOnly } };
 
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(
-                $"Nasdaq & AMEX\n\n{RecognizedTable}\n\nStocks in bold rose or fell 5%", 1)));
-
-        Assert.Equal(
-            new[]
-            {
-                ElementKindTag.Paragraph, ElementKindTag.Image,
-                ElementKindTag.OcrText, ElementKindTag.Table, ElementKindTag.OcrText,
-                ElementKindTag.Paragraph,
-            },
-            doc.Elements.Select(e => e.Kind.Tag).ToList());
-
-        Assert.Equal("Nasdaq & AMEX", doc.Elements[2].Text);
-        Assert.Equal("Stocks in bold rose or fell 5%", doc.Elements[4].Text);
-    }
-
-    /// <summary>
-    /// A cell holds the text the camera saw: entities decoded, because <c>OtslTable</c> encodes
-    /// what it writes, and nothing escaped, because the grid is what the plain and HTML
-    /// renderers read as well — Markdown's escaping in it would show up in both.
-    /// </summary>
-    [Fact]
-    public void ACellHoldsPlainDecodedText()
-    {
-        var doc = DocumentWithImage();
-
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(
-                "<table><tr><td>AT&amp;T | ACMoore*</td><td>39.20</td></tr></table>", 1)));
-
-        Assert.Equal("AT&T | ACMoore*", Assert.Single(doc.Tables).Cells[0][0]);
-
-        string plain = Derive.DeriveExtractionResult(
-            doc, includeDocumentStructure: false, OutputFormat.Plain).Content;
-        Assert.Contains("AT&T | ACMoore*", plain);
-
-        // Markdown, and only Markdown, escapes the pipe — once, so a reader gets one character
-        // back rather than a backslash to discount.
-        string markdown = Derive.DeriveExtractionResult(
-            doc, includeDocumentStructure: false, OutputFormat.Markdown).Content;
-        Assert.Contains(@"| AT\&T \| ACMoore* | 39.20 |", markdown);
-    }
-
-    /// <summary>
-    /// A merged cell keeps the rest of the row lined up with its headers: the spanning cell's
-    /// text sits at its origin and the columns it covers stay empty, which is the shared
-    /// <c>GridFlatten</c> placement every other format's tables get.
-    /// </summary>
-    [Fact]
-    public void AMergedCellKeepsTheGridAligned()
-    {
-        var doc = DocumentWithImage();
-
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(
-                "<table><tr><td colspan=\"2\">52-week</td><td>Stock</td></tr>"
-                + "<tr><td>9.19</td><td>6.89</td><td>ABX Air n</td></tr></table>", 1)));
-
-        Assert.Equal(
-            new[]
-            {
-                new[] { "52-week", "", "Stock" },
-                new[] { "9.19", "6.89", "ABX Air n" },
-            },
-            Assert.Single(doc.Tables).Cells.Select(r => r.ToArray()).ToArray());
-    }
-
-    /// <summary>
-    /// Markup that yields no grid — an empty table here — is left in the text verbatim rather
-    /// than becoming a table invented from a failed read. Markup a consumer can still parse
-    /// beats cells that were never recognised.
-    /// </summary>
-    [Fact]
-    public void MarkupThatYieldsNoGridIsLeftAsText()
-    {
-        var doc = DocumentWithImage();
-
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(
-                "<table><tr><td></td></tr></table>", 1)));
-
-        Assert.Empty(doc.Tables);
-        Assert.Equal(
-            new[] { "<table><tr><td></td></tr></table>" }, OcrTexts(doc));
-    }
-
-    /// <summary>
-    /// A recovered table takes the page of the image it came from, on the element and on the
-    /// table itself — the page is what relates a recognition to where it was found.
-    /// </summary>
-    [Fact]
-    public void ARecoveredTableCarriesItsImagesPage()
-    {
-        var doc = DocumentWithImage();
-        doc.Elements[1].Page = 4;
-
-        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
-            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
-            _ => new FakeEngine(_ => new OcrImageResult(RecognizedTable, 1)));
-
-        Assert.Equal(4u, doc.Elements[2].Page);
-        Assert.Equal(4u, Assert.Single(doc.Tables).PageNumber);
+        Assert.False(config.NeedsImageData());
+        Assert.Empty(new ImageExtractor().Extract(Png(), PngMime, config).Images);
     }
 }

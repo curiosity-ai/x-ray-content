@@ -85,8 +85,25 @@ public sealed class ExtractionConfig
     public OutputFormat OutputFormat { get; set; } = OutputFormat.Plain;
     public bool IncludeDocumentStructure { get; set; }
 
-    // Content-relevant option stubs (defaults; extractors read these later).
-    public bool ExtractImages { get; set; } = true;
+    /// <summary>
+    /// Keep the bytes of the images an extractor finds, in <c>ExtractedDocument.Images</c>.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, which is upstream's default too: its <c>images</c> is an
+    /// <c>Option&lt;ImageExtractionConfig&gt;</c> whose <c>None</c> means no image extraction, and
+    /// <c>needs_image_data()</c> reads through it. Carrying a document's images costs their whole
+    /// encoded size in memory and in any serialized result, so it is asked for rather than
+    /// assumed — see <see cref="NeedsImageData"/> for what else turns it on.
+    /// <para>
+    /// It currently gates <see cref="XRay.Content.Extractors.ImageExtractor"/> only. The
+    /// extractors that already attach images unconditionally — docx, rtf, epub, hwp, odf — are
+    /// untouched: upstream gates those on the same flag, but retrofitting it here would *remove*
+    /// images that callers of this package already receive.
+    /// </para>
+    /// </remarks>
+    public bool ExtractImages { get; set; }
+
+    // Content-relevant option stub (defaults; extractors read this later).
     public bool ExtractTables { get; set; } = true;
 
     /// <summary>
@@ -111,6 +128,28 @@ public sealed class ExtractionConfig
     /// </remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OcrOptions? Ocr { get; set; }
+
+    /// <summary>
+    /// Whether anything in this configuration needs an extracted image's bytes, rather than just
+    /// the fact that an image was there.
+    /// </summary>
+    /// <remarks>
+    /// Upstream's <c>needs_image_data()</c>, which is <c>extract_images || captioning || qr_codes</c>;
+    /// captioning is an LLM feature this port excludes, so it has no term here.
+    /// <para>
+    /// The OCR term is the port's own. Upstream recognises a standalone image *inside* its image
+    /// extractor, so its OCR branch never needs the bytes to travel; here OCR is a separate pass
+    /// over the finished document (see "Deviation: optional OCR" in <c>CLAUDE.md</c>), and
+    /// <see cref="OcrMode.AllImages"/> finds its work by walking <c>InternalDocument.Images</c>.
+    /// Without this term that pass has nothing to walk for a standalone image and silently
+    /// recognises nothing. <see cref="OcrMode.ScanOnly"/> is not included: it rasterises PDF pages
+    /// from the original bytes and never reads the image collection.
+    /// </para>
+    /// </remarks>
+    public bool NeedsImageData() =>
+        ExtractImages
+     || QrCodes == true
+     || Ocr?.Mode == OcrMode.AllImages;
 
     /// <summary>
     /// Limits applied to hostile input. <c>null</c> takes <see cref="SecurityLimits"/>' defaults,
