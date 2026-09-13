@@ -47,9 +47,16 @@
     <!-- The optional OCR pass; see the OCR section of CLAUDE.md. `PaddleOCR` is a managed
          recognizer whose only native dependency is SkiaSharp; `PaddleOCR.Pdf` adds PDFium, which
          is what rasterises a scanned page so ScanOnly has pixels to read. Both load lazily and
-         only once a caller turns OCR on. -->
-    <PackageReference Include="PaddleOCR" Version="26.8.4668" />
-    <PackageReference Include="PaddleOCR.Pdf" Version="26.8.4668" />
+         only once a caller turns OCR on.
+
+         Keep the two on the same version, and prefer bumping them together with a rebuild:
+         `PdfRasterizer.Render` gained an optional `maxPagePixels` parameter in 26.9.5064, which
+         is source-compatible but *not* binary-compatible — an assembly compiled against 26.8.4668
+         calls a four-argument overload that no longer exists, so a consumer whose graph resolves
+         the newer package gets a MissingMethodException inside ScanOnly. OCR is never fatal here,
+         so that surfaces as a processing warning and a scanned page that silently reads empty. -->
+    <PackageReference Include="PaddleOCR" Version="26.9.5064" />
+    <PackageReference Include="PaddleOCR.Pdf" Version="26.9.5064" />
   </ItemGroup>
 
 </Project>

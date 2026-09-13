@@ -1,5 +1,8 @@
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using XRay.Content.Core;
 using XRay.Content.Core.Ocr;
+using XRay.Content.Extractors;
 using XRay.Content.Types;
 using Xunit;
 
@@ -413,5 +416,107 @@ public sealed class OcrProcessorTests
         var result = Derive.DeriveExtractionResult(
             doc, includeDocumentStructure: false, OutputFormat.Plain);
         Assert.Equal(ExtractionMethod.Mixed, result.ExtractionMethod);
+    }
+
+    // ── The extractor/pass seam for a standalone image ───────────────────────
+
+    /// <summary>
+    /// A real PNG, so the extractor under test is the one that ships. The default size clears
+    /// <see cref="OcrOptions.MinImagePixels"/> (64x64), below which the pass rightly skips an
+    /// image as an icon or a spacer.
+    /// </summary>
+    private static byte[] Png(int width = 200, int height = 150)
+    {
+        using var image = new Image<Rgb24>(width, height);
+        using var buffer = new MemoryStream();
+        image.SaveAsPng(buffer);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// A standalone image file carries no image data unless something asks for it.
+    /// </summary>
+    /// <remarks>
+    /// The default has to stay empty: the bytes are the whole file, so attaching them
+    /// unconditionally would put every image extraction's input into its own output. Upstream
+    /// defaults the same way — its `images` config is an Option whose None means no image data.
+    /// </remarks>
+    [Fact]
+    public void AStandaloneImageCarriesNoDataByDefault()
+    {
+        var doc = new ImageExtractor().Extract(Png(), PngMime, new ExtractionConfig());
+
+        Assert.Empty(doc.Images);
+        Assert.Single(doc.Elements, e => e.Kind.Tag == ElementKindTag.Image);
+    }
+
+    /// <summary>Asking for image data is what attaches it, with its dimensions.</summary>
+    [Fact]
+    public void AStandaloneImageCarriesItsDataWhenAsked()
+    {
+        byte[] png = Png();
+
+        var doc = new ImageExtractor().Extract(png, PngMime,
+            new ExtractionConfig { ExtractImages = true });
+
+        var image = Assert.Single(doc.Images);
+        Assert.Equal(png, image.Data);
+        Assert.Equal("PNG", image.Format);
+        Assert.Equal(200u, image.Width);
+        Assert.Equal(150u, image.Height);
+        Assert.Single(doc.Elements, e => e.Kind.Tag == ElementKindTag.Image);
+    }
+
+    /// <summary>QR decoding reads the same bytes, so it asks for them too.</summary>
+    [Fact]
+    public void QrDecodingAlsoAsksForTheData()
+    {
+        var doc = new ImageExtractor().Extract(Png(), PngMime,
+            new ExtractionConfig { QrCodes = true });
+
+        Assert.Single(doc.Images);
+    }
+
+    /// <summary>
+    /// AllImages recognises a standalone image file — the case the two halves of this port used
+    /// to miss between them.
+    /// </summary>
+    /// <remarks>
+    /// The extractor produced an Image element with no bytes behind it and the pass walks
+    /// `doc.Images` looking for bytes, so a plain `.png` came back with no text however the
+    /// options were set — no warning, no error, just nothing. Upstream never had the gap because
+    /// it recognises inside its image extractor; here the two are separate, so the config has to
+    /// carry the need across. Drive it end to end rather than from a hand-built document: a
+    /// document built by hand has the images the test gave it, which is precisely what was
+    /// wrong.
+    /// </remarks>
+    [Fact]
+    public void AllImagesRecognisesAStandaloneImageFile()
+    {
+        byte[] png = Png();
+        var config = new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } };
+
+        var doc = new ImageExtractor().Extract(png, PngMime, config);
+        var engine = new FakeEngine();
+
+        OcrProcessor.Process(doc, png, PngMime, config, _ => engine);
+
+        Assert.Equal(new[] { png.Length }, engine.Calls);
+        Assert.Contains(doc.Elements, e => e.Text == "recognised text");
+
+        var result = Derive.DeriveExtractionResult(
+            doc, includeDocumentStructure: false, OutputFormat.Plain);
+        Assert.Contains("recognised text", result.Content);
+        Assert.Equal(ExtractionMethod.Mixed, result.ExtractionMethod);
+    }
+
+    /// <summary>ScanOnly reads pages from the PDF bytes, so it must not start hauling images.</summary>
+    [Fact]
+    public void ScanOnlyDoesNotAskForImageData()
+    {
+        var config = new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.ScanOnly } };
+
+        Assert.False(config.NeedsImageData());
+        Assert.Empty(new ImageExtractor().Extract(Png(), PngMime, config).Images);
     }
 }

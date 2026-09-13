@@ -359,7 +359,7 @@ deviation rather than a port:
 |---|---|
 | `Disabled` | Nothing. No model is resolved, no native library is touched. |
 | `ScanOnly` | Pages a PDF's scan detector flagged (`PdfMetadata.ScannedPages`, from the existing `PdfScanDetect`). The pages are rasterised at `Dpi` and recognised whole; the text is **appended** as a page-level `OcrText` element carrying its `Page`, because a whole page's recognition has no single element to sit after. |
-| `AllImages` | Every embedded image that carries bytes and clears `MinImagePixels`, plus the `ScanOnly` behaviour for PDFs. Each image's text is **inserted immediately after the `Image` element that references it**, so every renderer places it inline for free. An image no element references is appended rather than dropped. |
+| `AllImages` | Every embedded image that carries bytes and clears `MinImagePixels`, plus the `ScanOnly` behaviour for PDFs. Each image's text is **inserted immediately after the `Image` element that references it**, so every renderer places it inline for free. An image no element references is appended rather than dropped. Selecting it makes `ExtractionConfig.NeedsImageData()` true, which is what gets a standalone image file's bytes attached for the pass to find — see below. |
 
 ### Where it runs, and why there
 
@@ -381,6 +381,21 @@ Note this differs from `QrPostProcessor`, which runs after rendering.
   comes back intact. A document is not a failure for lacking OCR.
 - **No work, no weights.** What there is to recognise is computed before the engine is
   constructed, so a mode with nothing to do costs nothing.
+- **The pass walks `InternalDocument.Images`, so something has to put them there.** Upstream
+  recognises a standalone image *inside* its image extractor, so its bytes never have to travel;
+  here the two are separate, and `ImageExtractor` follows upstream's
+  `build_image_internal_document(None, attach_image)` — bytes only when
+  `config.needs_image_data()`. `ExtractionConfig.NeedsImageData()` is that predicate:
+  `ExtractImages || QrCodes == true || Ocr.Mode == AllImages`. Drop the OCR term and `AllImages`
+  goes quiet on every plain `.png` — no warning, no error, just no text, which is exactly how it
+  behaved before this was noticed. `ScanOnly` is deliberately not a term: it rasterises pages from
+  the original PDF bytes and never reads the image collection.
+- **`ExtractImages` is off by default and that is not an oversight.** The bytes of a standalone
+  image are the whole input file, so attaching them unconditionally would put every image
+  extraction's input into its own output. Upstream defaults the same way — its `images` is an
+  `Option` whose `None` means no image extraction. The extractors that already attach
+  unconditionally (docx, rtf, epub, hwp, odf) are left alone: upstream gates them on the same
+  flag, but retrofitting it here would *remove* images that callers already receive.
 - **Nothing downloads.** `OcrOptions.ModelDirectory` (and `LayoutModelDirectory`) name where
   the checkpoint already is; absent those, PaddleOCR's own cache root is consulted so a
   cache warmed out of band works unconfigured. A missing checkpoint raises
@@ -395,5 +410,22 @@ Note this differs from `QrPostProcessor`, which runs after rendering.
 `IOcrEngine` exists so the flow is testable: the shipped recognizer needs a multi-gigabyte
 checkpoint, so `OcrProcessorTests` drives everything through a fake. Recognition quality is
 PaddleOCR's own business and is not re-tested here. Every assertion in that file has been
-mutation-proved — each of the thirteen behaviours above was reverted in turn and the
-corresponding test watched to fail.
+mutation-proved — each behaviour above was reverted in turn and the corresponding test watched
+to fail.
+
+Most of that file builds an `InternalDocument` by hand, which is the right shape for testing
+placement and budgets and the wrong one for testing whether a document *arrives* with images:
+a hand-built document has whatever images the test gave it, which is precisely what was broken.
+`AllImagesRecognisesAStandaloneImageFile` therefore runs the real `ImageExtractor` and then the
+pass. Keep that one end to end.
+
+### The PaddleOCR packages are binary-fragile — bump both, and rebuild
+
+`PdfRasterizer.Render` gained an optional `maxPagePixels` parameter in `PaddleOCR.Pdf`
+26.9.5064. Adding an optional parameter is source-compatible and **not** binary-compatible: an
+`X-Ray.Content` compiled against 26.8.4668 calls a four-argument overload that no longer exists,
+so a consumer whose graph resolves the newer package gets a `MissingMethodException` the moment
+`ScanOnly` rasterises. The never-fatal rule then turns it into a processing warning, so the
+symptom is a scanned PDF that quietly reads empty and an OCR pass that looks much *faster*.
+Keep `PaddleOCR` and `PaddleOCR.Pdf` on the same version, and publish a rebuilt package when
+they move.
