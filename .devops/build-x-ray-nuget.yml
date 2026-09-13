@@ -8,10 +8,15 @@
 # project was packed with, so publishing together pins it to this run with nothing to bump by
 # hand. Publishing a member on its own would leave the umbrella pointing at the older version.
 variables:
-  # Every packable project, in dependency order. `projects` and `packagesToPack` both accept a
-  # newline-separated list, and the tasks run once per entry.
+  # Every packable project, in dependency order. The two tasks that take a list do not take it
+  # the same way: `projects` (restore/build) is a multi-line input, one path per line, while
+  # `packagesToPack` is a *pattern* input that is split on semicolons only — a newline-separated
+  # value there is one pattern containing a newline, which matches no file, and the pack step
+  # fails with "No files matched the search pattern". Hence `packList` below.
   library: './dotnet/src/XRay.Content/XRay.Content.csproj'
   umbrella: './dotnet/src/XRay/XRay.csproj'
+  # The same two projects as one semicolon-separated pattern, for `packagesToPack`.
+  packList: '$(library);$(umbrella)'
   buildConfiguration: 'Release'
   targetVersion: yy.M.$(build.buildId)
 
@@ -80,9 +85,7 @@ steps:
 - task: DotNetCoreCLI@2
   inputs:
     command: 'pack'
-    packagesToPack: |
-      $(library)
-      $(umbrella)
+    packagesToPack: '$(packList)'
     packDirectory: '$(Build.ArtifactStagingDirectory)'
     versioningScheme: 'off'
     configuration: '$(buildConfiguration)'
