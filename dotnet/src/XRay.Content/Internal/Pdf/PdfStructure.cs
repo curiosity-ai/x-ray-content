@@ -204,9 +204,17 @@ public static class PdfStructure
     /// from text geometry, matching the tier priority in the flat table list.</param>
     /// <param name="outlineEntries">The document's bookmarks, if any. A heading the
     /// font-size classifier could not see is recovered from the outline item that names it.</param>
+    /// <param name="ruledCoverage">
+    /// Every page region the ruled tiers read, where that is not the same thing as
+    /// <paramref name="ruledTables"/>. A table joined across a page break is one table filed
+    /// under the page it starts on, so the pages its rest came from carry no table of their own
+    /// — but their words are still a table's, and taking them out of the paragraph stream is
+    /// what stops the same rows coming out a second time as prose. Defaults to
+    /// <paramref name="ruledTables"/>, which is what it is whenever nothing was joined.
+    /// </param>
     public static InternalDocument? Build(
         List<List<SegmentData>> allPageSegments, int kClusters = 4, List<Table>? ruledTables = null,
-        List<PdfOutlineEntry>? outlineEntries = null)
+        List<PdfOutlineEntry>? outlineEntries = null, List<Table>? ruledCoverage = null)
     {
         int pageCount = allPageSegments.Count;
 
@@ -219,6 +227,7 @@ public static class PdfStructure
             try { ruledTables = PdfTableStitch.StitchFragmentedTables(ruledTables, allPageSegments); }
             catch { }
         }
+        ruledCoverage ??= ruledTables;
 
         // Text-repair evidence is document-scoped and must be gathered before any page's
         // segments are consumed: a witness on one page can be the sole evidence for a repair
@@ -241,14 +250,22 @@ public static class PdfStructure
         // detector misses, and the whole path without one), then their words are taken out of the
         // paragraph stream so a grid does not also come out as prose.
         var tablesByPage = new List<List<Table>>(pageCount);
+        // What a page's tables cover, which is only a different list where a table was joined
+        // across a page break: the page its rest came from has coverage and no table.
+        var coverageByPage = new List<List<Table>>(pageCount);
         for (int i = 0; i < pageCount; i++)
         {
             List<Table> pageTables;
             uint pageNumber = (uint)(i + 1);
-            if (ruledTables is not null)
+            if (ruledCoverage is not null)
             {
-                var ruled = ruledTables.FindAll(t => t.PageNumber == pageNumber);
-                if (ruled.Count > 0) { tablesByPage.Add(ruled); continue; }
+                var covered = ruledCoverage.FindAll(t => t.PageNumber == pageNumber);
+                if (covered.Count > 0)
+                {
+                    tablesByPage.Add(ruledTables?.FindAll(t => t.PageNumber == pageNumber) ?? covered);
+                    coverageByPage.Add(covered);
+                    continue;
+                }
             }
             try
             {
@@ -262,6 +279,7 @@ public static class PdfStructure
             }
             catch { pageTables = new List<Table>(); }
             tablesByPage.Add(pageTables);
+            coverageByPage.Add(pageTables);
         }
 
         var allPageParagraphs = new List<List<PdfParagraph>>(pageCount);
@@ -275,7 +293,7 @@ public static class PdfStructure
             // afterwards).
             var gapYs = ComputeParagraphGapYs(allPageSegments[i]);
             var segs = OrderSegmentsInReadingFrames(
-                FilterSegmentsByTableBboxes(allPageSegments[i], tablesByPage[i]));
+                FilterSegmentsByTableBboxes(allPageSegments[i], coverageByPage[i]));
             var paras = BlocksToParagraphs(segs, headingMap, gapYs);
             // Segment-level repair runs here, before paragraphs are merged, because the
             // continuation and dehyphenation rules read the last and first characters of
