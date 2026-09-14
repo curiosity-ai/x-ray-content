@@ -35,7 +35,10 @@ public static class Derive
 
         List<PageContent>? pages = doc.PrebuiltPages ?? BuildPages(doc);
 
-        if (renderPagesInOutputFormat && pages is not null && formatted is not null)
+        // Not for a page the extractor prebuilt: that content is already rendered, and it carries
+        // what the element stream does not — a sheet's name as its heading, say — so re-rendering
+        // the page's elements would lose it.
+        if (renderPagesInOutputFormat && pages is not null && formatted is not null && doc.PrebuiltPages is null)
             RenderPagesFormatted(doc, pages, outputFormat, htmlOutput);
 
         DocumentStructure? document = includeDocumentStructure ? DeriveDocumentStructure(doc) : null;
@@ -78,10 +81,10 @@ public static class Derive
     /// </para>
     /// <para>
     /// Each page is rendered from a slice of the document carrying only that page's elements, so
-    /// the renderer resolves tables and images through the same indices. A page whose elements
-    /// are not marked with its number — a document whose extractor supplied
-    /// <see cref="InternalDocument.PrebuiltPages"/>, where the page content is already rendered —
-    /// keeps the content it came with.
+    /// the renderer resolves tables and images through the same indices. A page whose elements are
+    /// not marked with its number keeps the content it came with, and a document whose extractor
+    /// supplied <see cref="InternalDocument.PrebuiltPages"/> is skipped entirely: those pages are
+    /// already rendered, and they carry what the element stream does not.
     /// </para>
     /// </remarks>
     private static void RenderPagesFormatted(

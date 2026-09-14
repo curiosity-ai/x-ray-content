@@ -106,14 +106,34 @@ public sealed class PageFormattedContentTests
     }
 
     /// <summary>
-    /// A page whose elements are not marked with its number keeps the content it came with. That
-    /// is the shape a workbook has: its extractor supplies the pages already rendered.
+    /// A page whose elements are not marked with its number keeps the content it came with.
     /// </summary>
     [Fact]
     public void APageWithNoElementsOfItsOwnKeepsItsContent()
     {
+        var doc = TwoPages();
+        doc.Elements[2].Page = null;
+
+        var pages = Assert.IsType<List<PageContent>>(Derive.DeriveExtractionResult(
+            doc, includeDocumentStructure: false, OutputFormat.Markdown,
+            htmlOutput: null, renderPagesInOutputFormat: true).Pages);
+
+        Assert.Single(pages);
+        Assert.NotNull(pages[0].FormattedContent);
+    }
+
+    /// <summary>
+    /// A document whose extractor prebuilt its pages is skipped entirely: a workbook's page
+    /// content is already rendered, and it carries the sheet's name as a heading, which the
+    /// element stream does not — so re-rendering the elements would lose it.
+    /// </summary>
+    [Fact]
+    public void PrebuiltPagesAreLeftAsTheirExtractorWroteThem()
+    {
         var doc = new InternalDocument("xlsx") { MimeType = "application/vnd.ms-excel" };
-        doc.Elements.Add(InternalElement.TextElement(ElementKind.Paragraph, "unpaged", 0));
+        var cell = InternalElement.TextElement(ElementKind.Paragraph, "a", 0);
+        cell.Page = 1;
+        doc.Elements.Add(cell);
         doc.PrebuiltPages = new List<PageContent>
         {
             new() { PageNumber = 1, Content = "## Sheet1\n\n| a |\n| --- |" },
