@@ -80,12 +80,40 @@ internal sealed class GridRow
     };
 }
 
+/// <summary>
+/// A table the ruling-line tier read, with the grid geometry it was read from.
+/// </summary>
+/// <param name="Table">The table as the pipeline emits it.</param>
+/// <param name="ColumnBoundaries">
+/// The x of every gridline bounding its columns, or null where the tier inferred the columns
+/// rather than reading them off the page.
+/// </param>
+/// <param name="IsContinuationCandidate">
+/// Whether the band was too small to stand on its own and is offered only as the continuation
+/// of a table on a neighbouring page.
+/// </param>
+internal readonly record struct RuledTable(
+    Table Table, double[]? ColumnBoundaries, bool IsContinuationCandidate);
+
 internal sealed class GridTable
 {
     public List<GridRow> Rows = new();
     public bool HasHeader;
     public int ColCount;
     public PathRect? Bbox;
+
+    /// <summary>
+    /// The x of every gridline bounding this table's columns, where it came from a grid that
+    /// has them. Null from the cluster tier, which infers columns rather than reading them.
+    /// </summary>
+    public double[]? ColumnBoundaries;
+
+    /// <summary>
+    /// A well-formed grid too small to stand on its own. Emitted only as a candidate
+    /// continuation of a table on the page before or after — see
+    /// <see cref="PdfTableContinuation"/> — and dropped if nothing claims it.
+    /// </summary>
+    public bool BelowThreshold;
 }
 
 internal static partial class PdfSpatialTables
@@ -103,6 +131,13 @@ internal static partial class PdfSpatialTables
 
     /// <summary>Line/rect path count above which a page is a drawing, not a ruled table.</summary>
     private const int MaxTableEdges = 1500;
+
+    /// <summary>
+    /// Filled cells a band below <see cref="TableDetectionConfig.MinTableCells"/> still needs
+    /// before it is worth offering as the continuation of a table on the next page. Two is a
+    /// row of a two-column table, which is the smallest thing a page break can leave behind.
+    /// </summary>
+    private const int MinContinuationCells = 2;
 
     /// <summary>
     /// Candidate gridlines scanned past the nearest one when closing a cell. A merged cell
@@ -282,6 +317,22 @@ internal static partial class PdfSpatialTables
         List<TableSpan> spans, List<PdfPath> paths, uint pageNumber, TableDetectionConfig config)
     {
         var result = new List<Table>();
+        foreach (var ruled in DetectPageRuledTables(spans, paths, pageNumber, config))
+            if (!ruled.IsContinuationCandidate) result.Add(ruled.Table);
+        return result;
+    }
+
+    /// <summary>
+    /// One page's ruled tables with the grid geometry behind them, plus the well-formed bands
+    /// that fell below the size floor. The geometry is what lets
+    /// <see cref="PdfTableContinuation"/> tell a table's continuation on the next page from an
+    /// unrelated table that merely starts there; the small bands are what a page break leaves
+    /// of a table whose rows are all on the other side of it.
+    /// </summary>
+    public static List<RuledTable> DetectPageRuledTables(
+        List<TableSpan> spans, List<PdfPath> paths, uint pageNumber, TableDetectionConfig config)
+    {
+        var result = new List<RuledTable>();
         if (spans.Count == 0) return result;
 
         // A page carrying thousands of line/rect paths is a drawing or a chart, not a ruled
@@ -301,30 +352,38 @@ internal static partial class PdfSpatialTables
         var detected = DetectTablesWithLines(spans, lines, config);
         foreach (var t in detected)
         {
-            // document.rs applies the same prose-rejection filter this public API gets.
-            if (!IsRealGrid(t) || LooksLikeProseTable(t)) continue;
+            // document.rs applies the same prose-rejection filter this public API gets. The
+            // size-shaped half of it — two rows, two filled cells to a row — is what a
+            // continuation candidate is exempt from, since being too small is what makes it
+            // one; the prose rejection still applies to both.
+            if (LooksLikeProseTable(t)) continue;
+            if (!t.BelowThreshold && !IsRealGrid(t)) continue;
             if (t.Rows.Count == 0 || t.ColCount == 0) continue;
 
             var (cells, markdown) = ConvertExtractedTable(t, spans);
             if (cells.Count == 0 || markdown.Trim().Length == 0) continue;
-            if (cells.Count < 2 || cells.All(r => r.Count < 2)) continue;
+            if (!t.BelowThreshold && (cells.Count < 2 || cells.All(r => r.Count < 2))) continue;
+            if (t.BelowThreshold && cells.All(r => r.Count < 2)) continue;
 
-            result.Add(new Table
-            {
-                Cells = cells,
-                Markdown = markdown,
-                PageNumber = pageNumber,
-                // Single precision: the reference's far edges are the f32 sums of f32 edges.
-                BoundingBox = t.Bbox is { } bb
-                    ? new BoundingBox
-                    {
-                        X0 = bb.X,
-                        Y0 = bb.Y,
-                        X1 = (float)bb.X + (float)bb.Width,
-                        Y1 = (float)bb.Y + (float)bb.Height,
-                    }
-                    : null,
-            });
+            result.Add(new RuledTable(
+                new Table
+                {
+                    Cells = cells,
+                    Markdown = markdown,
+                    PageNumber = pageNumber,
+                    // Single precision: the reference's far edges are the f32 sums of f32 edges.
+                    BoundingBox = t.Bbox is { } bb
+                        ? new BoundingBox
+                        {
+                            X0 = bb.X,
+                            Y0 = bb.Y,
+                            X1 = (float)bb.X + (float)bb.Width,
+                            Y1 = (float)bb.Y + (float)bb.Height,
+                        }
+                        : null,
+                },
+                t.ColumnBoundaries,
+                t.BelowThreshold));
         }
         return result;
     }
@@ -334,12 +393,25 @@ internal static partial class PdfSpatialTables
         List<TableSpan> spans, List<PdfPath> lines, TableDetectionConfig config)
     {
         var tables = DetectTablesFromIntersections(spans, lines, config);
-        if (tables.Count > 0) return tables.Where(IsValidTable).ToList();
+        // Continuation candidates count for nothing here. Whether the intersection tier found
+        // a grid at all, and so whether the clustering below runs, is decided on the real
+        // tables exactly as it was before candidates existed — a band too small to be a table
+        // is also too small to stand in for one. They ride along with whichever branch wins.
+        var candidates = tables.Where(t => t.BelowThreshold && IsValidTable(t)).ToList();
+        var real = tables.Where(t => !t.BelowThreshold).ToList();
+        if (real.Count > 0)
+        {
+            var kept = real.Where(IsValidTable).ToList();
+            kept.AddRange(candidates);
+            return kept;
+        }
 
         // A table can be ruled without its rules ever meeting: separate horizontal and
         // vertical strokes that stop short of each other leave no corner for intersection
         // detection to find. Clustering the rules' own coordinates still yields the grid.
-        return DetectTablesInClusters(spans, lines, config);
+        var clustered = DetectTablesInClusters(spans, lines, config);
+        clustered.AddRange(candidates);
+        return clustered;
     }
 
     // ── Edges ────────────────────────────────────────────────────────────────
@@ -967,8 +1039,15 @@ internal static partial class PdfSpatialTables
         {
             var assigned = AssignSpansToIntersectionGrid(groupCells, xs, ys, numCols, spans);
             if (assigned is not { } a) continue;
-            tables.AddRange(FinalizeIntersectionTables(a.Rows, a.SpanIndices, spans, config, numCols));
+            tables.AddRange(FinalizeIntersectionTables(a.Rows, a.SpanIndices, spans, config, numCols, xs));
         }
+
+        // A candidate is offered to the cross-page join and to nothing else. Holding it back
+        // from the merge and the divider split is what keeps it from changing how the page's
+        // real tables assemble — which band merges into which is sensitive to what else is in
+        // the list, and a band that is not a table has no business deciding that.
+        var candidates = tables.Where(t => t.BelowThreshold).ToList();
+        tables.RemoveAll(t => t.BelowThreshold);
 
         MergeVerticallyAdjacentTables(tables);
 
@@ -977,7 +1056,9 @@ internal static partial class PdfSpatialTables
         var (hEdges, vEdges) = ExtractEdges(lines);
         SnapAndMerge(hEdges);
         SnapEdges(vEdges);
-        return SplitTablesAtSectionDividers(tables, hEdges, vEdges, config);
+        var split = SplitTablesAtSectionDividers(tables, hEdges, vEdges, config);
+        split.AddRange(candidates);
+        return split;
     }
 
     private static bool RowIsEmpty(GridRow r) => r.Cells.All(c => c.Text.Length == 0);
@@ -999,7 +1080,7 @@ internal static partial class PdfSpatialTables
 
     private static List<GridTable> FinalizeIntersectionTables(
         List<GridRow> rows, List<List<List<int>>> rowCellSpanIndices,
-        List<TableSpan> spans, TableDetectionConfig config, int numCols)
+        List<TableSpan> spans, TableDetectionConfig config, int numCols, List<double> xs)
     {
         // A row holding text at several distinct Y positions has no horizontal rules
         // between its lines; split it on the text's own Y clustering.
@@ -1015,8 +1096,19 @@ internal static partial class PdfSpatialTables
             while (subEnd < tableRows.Count && !RowIsEmpty(tableRows[subEnd])) subEnd++;
             var subRows = tableRows.GetRange(subStart, subEnd - subStart);
             int filled = subRows.SelectMany(r => r.Cells).Count(c => c.Text.Length > 0);
-            if (filled >= config.MinTableCells)
-                tables.Add(new GridTable { Rows = subRows, ColCount = numCols, Bbox = RowsBbox(subRows) });
+            // Below the floor the band is not a table on its own — but a table's first rows
+            // can be all that fits before a page break, and a header row alone at the foot of
+            // a page is exactly that shape. Keep it as a candidate continuation; it is dropped
+            // unless a table on the neighbouring page claims it.
+            if (filled >= config.MinTableCells || filled >= MinContinuationCells)
+                tables.Add(new GridTable
+                {
+                    Rows = subRows,
+                    ColCount = numCols,
+                    Bbox = RowsBbox(subRows),
+                    ColumnBoundaries = xs.ToArray(),
+                    BelowThreshold = filled < config.MinTableCells,
+                });
             subStart = subEnd;
         }
         return tables;
@@ -1344,7 +1436,14 @@ internal static partial class PdfSpatialTables
         {
             int filled = subRows.SelectMany(r => r.Cells).Count(c => c.Text.Length > 0);
             if (filled < config.MinTableCells) continue;
-            result.Add(new GridTable { Rows = subRows, ColCount = table.ColCount, Bbox = RowsBbox(subRows) });
+            result.Add(new GridTable
+            {
+                Rows = subRows,
+                ColCount = table.ColCount,
+                Bbox = RowsBbox(subRows),
+                ColumnBoundaries = table.ColumnBoundaries,
+                BelowThreshold = table.BelowThreshold,
+            });
         }
         // Don't lose data when every slice came out too small.
         return result.Count == 0 ? single : result;
@@ -1453,6 +1552,12 @@ internal static partial class PdfSpatialTables
                 target.Bbox = new PathRect(minX, minY, maxX - minX, maxY - minY);
             }
             target.HasHeader = target.HasHeader || table.HasHeader;
+            // A candidate that merges into a real table is part of one, and stops being a
+            // candidate; the merged columns are the wider of the two grids' own.
+            target.BelowThreshold = target.BelowThreshold && table.BelowThreshold;
+            if (target.ColumnBoundaries is null
+                || (table.ColumnBoundaries is { } tc && tc.Length > target.ColumnBoundaries.Length))
+                target.ColumnBoundaries = table.ColumnBoundaries;
         }
 
         tables.Clear();

@@ -74,23 +74,35 @@ public sealed class PdfExtractor : IExtractor
         // candidate carries more content over a shared region is what stops a partial reading
         // from shadowing a fuller one. Both are what upstream's own `prepare_emitted_tables`
         // does to the combined list, one pass later.
-        var tables = new List<XRay.Content.Types.Table>();
-        try { tables.AddRange(ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Strict(), null)); }
+        var ruled = new List<RuledTable>();
+        try { ruled.AddRange(ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Strict())); }
         catch { }
-        try { FoldTier(tables, ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Bordered(), null)); }
+        try { FoldTier(ruled, ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Bordered()), r => r.Table); }
         catch { }
+
+        // A table longer than a page arrives as a fragment per page, because every tier here
+        // reads one page at a time. Joining them needs the ruling-line geometry, so it happens
+        // while that is still to hand — and before the heuristic tier, whose tables have none.
+        // Which pages the ruled tiers read is taken before the join, not after: a joined table
+        // is filed under the page it starts on, and the pages its rest covers are just as much
+        // claimed as that one. A continuation candidate claims nothing — it is not a table the
+        // ruled tiers found, and letting it stand for one would silence the heuristic tier on
+        // a page whose only ruled reading was a band too small to keep.
+        var ruledPages = new HashSet<uint>(
+            ruled.Where(r => !r.IsContinuationCandidate).Select(r => r.Table.PageNumber));
+        var (tables, continuations) = PdfTableContinuation.Join(ruled);
         // The heuristic tier keeps upstream's page-level skip for *new* tables — it is the
         // loosest of the three, and letting it loose on a page the ruled tiers have already
         // read turns running prose into tables. What it may still do on such a page is replace
         // a ruled table that is only a part of what is there.
-        var ruledPages = new HashSet<uint>(tables.Select(t => t.PageNumber));
         try
         {
             FoldTier(
                 tables,
                 PdfTableReconstruct.ExtractHeuristicTables(
                     pageSegments, allowSingleColumn: false, skipPages: null, pagePaths),
-                supersedeOnlyOn: ruledPages);
+                t => t,
+                ruledPages);
         }
         catch { }
         foreach (var table in tables) PdfTableNormalize.RepairConsistentlyMergedNumericColumn(table);
@@ -122,7 +134,16 @@ public sealed class PdfExtractor : IExtractor
             List<PdfOutlineEntry> outline;
             try { outline = PdfBookmarks.ExtractOutlineEntries(pdf); }
             catch { outline = new List<PdfOutlineEntry>(); }
-            try { structured = PdfStructure.Build(pageSegments, ruledTables: tables, outlineEntries: outline); }
+            // The joined tables place and the fragments cover: a page holding the rest of a
+            // table joined from the page before carries no table of its own, and its rows would
+            // otherwise come back out as prose beside the table they are already in.
+            var coverage = new List<XRay.Content.Types.Table>(tables);
+            coverage.AddRange(continuations);
+            try
+            {
+                structured = PdfStructure.Build(
+                    pageSegments, ruledTables: tables, outlineEntries: outline, ruledCoverage: coverage);
+            }
             catch { structured = null; }
         }
 
@@ -256,20 +277,21 @@ public sealed class PdfExtractor : IExtractor
     /// reading more of it is what separates that from an ordinary disagreement, where the
     /// earlier tier keeps the region.
     /// </summary>
-    private static void FoldTier(
-        List<XRay.Content.Types.Table> kept, List<XRay.Content.Types.Table> candidates,
+    private static void FoldTier<T>(
+        List<T> kept, IEnumerable<T> candidates, Func<T, XRay.Content.Types.Table> table,
         HashSet<uint>? supersedeOnlyOn = null)
     {
-        foreach (var candidate in candidates)
+        foreach (var entry in candidates)
         {
+            var candidate = table(entry);
             var overlapping = new List<int>();
             for (int i = 0; i < kept.Count; i++)
-                if (SameRegion(kept[i], candidate)) overlapping.Add(i);
+                if (SameRegion(table(kept[i]), candidate)) overlapping.Add(i);
 
             if (overlapping.Count == 0)
             {
                 if (supersedeOnlyOn is null || !supersedeOnlyOn.Contains(candidate.PageNumber))
-                    kept.Add(candidate);
+                    kept.Add(entry);
                 continue;
             }
 
@@ -277,8 +299,8 @@ public sealed class PdfExtractor : IExtractor
             int content = ContentCells(candidate);
             bool supersedes = area > 0;
             foreach (int i in overlapping)
-                if (ContentCells(kept[i]) >= content
-                    || BoxArea(kept[i]) >= area * TablePartialReadingRatio)
+                if (ContentCells(table(kept[i])) >= content
+                    || BoxArea(table(kept[i])) >= area * TablePartialReadingRatio)
                 {
                     supersedes = false;
                     break;
@@ -286,7 +308,7 @@ public sealed class PdfExtractor : IExtractor
             if (!supersedes) continue;
 
             for (int i = overlapping.Count - 1; i >= 0; i--) kept.RemoveAt(overlapping[i]);
-            kept.Add(candidate);
+            kept.Add(entry);
         }
     }
 
@@ -319,20 +341,19 @@ public sealed class PdfExtractor : IExtractor
 
     // Single per-page pass: parse each page's content stream once, then derive both the
     // assembled page text (returned, joined by blank lines) and the font-metric
-    /// <summary>
-    /// Run one ruling-line tier over every page, or over every page
-    /// <paramref name="skipPages"/> does not name.
-    /// </summary>
-    private static List<XRay.Content.Types.Table> ExtractRuledTables(
-        List<List<TableSpan>> pageWords, List<List<PdfPath>> pagePaths,
-        TableDetectionConfig config, HashSet<uint>? skipPages)
+    /// <summary>Run one ruling-line tier over every page, keeping its grid geometry.</summary>
+    private static List<RuledTable> ExtractRuledTables(
+        List<List<TableSpan>> pageWords, List<List<PdfPath>> pagePaths, TableDetectionConfig config)
     {
-        var tables = new List<XRay.Content.Types.Table>();
+        var tables = new List<RuledTable>();
         for (int i = 0; i < pageWords.Count && i < pagePaths.Count; i++)
         {
             uint pageNumber = (uint)(i + 1);
-            if (skipPages is not null && skipPages.Contains(pageNumber)) continue;
-            try { tables.AddRange(PdfSpatialTables.DetectPageTables(pageWords[i], pagePaths[i], pageNumber, config)); }
+            try
+            {
+                tables.AddRange(
+                    PdfSpatialTables.DetectPageRuledTables(pageWords[i], pagePaths[i], pageNumber, config));
+            }
             catch { }
         }
         return tables;

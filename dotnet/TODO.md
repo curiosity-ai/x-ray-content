@@ -2309,19 +2309,71 @@ pages where both implementations already fail:
 And five fixtures the change **fixes outright**: `pdf/nougat_046.pdf` / `pdf/pdfa_021.pdf`,
 `user_reports/mp_axmp_rec_en.pdf`, and `vendored/pdfplumber/{pdf,pdfs}/table-curves-example.pdf`.
 
+## A table longer than a page is one table (2026-09-14)
+
+`Internal/Pdf/PdfTableContinuation.cs`, new rather than a port. Every tier reads a page at a
+time, so a table longer than one arrives as a fragment per page: rows that belong together land
+in different entries of `tables[]`, and the header — which only the first fragment has — stops
+describing the rest of them. Upstream does not join these either; its `PdfTableStitch` groups by
+page before it does anything, and is reachable only from the structure pipeline. On the document
+that reported the ruled-table defects above, this was the difference between twelve fragments and
+the four tables on its pages.
+
+**The join rides on geometry the ruling-line tier already had, and now keeps.** `GridTable`
+carries the x of every gridline bounding its columns, and `DetectPageRuledTables` hands that out
+beside each table. Two tables continue each other when those are the *same lines* — not merely
+the same count, and not merely the same outer margins, both of which a document with one page
+layout hands to every table on every page. Four conditions, each earning its place on a corpus
+fixture:
+
+- **The same gridlines**, to the ruling tier's own snap tolerance.
+- **The same number of columns**, since two grids can share gridlines and still be read into
+  different numbers of columns when a tier merges some of them.
+- **The same columns actually written in** — one side's filled columns must be the other's or a
+  subset of them. `vendored/pdfplumber/.../issue-1181.pdf` is a page of `Foo` in the left three
+  columns of a seven-column grid followed by a page of `Bar` in the right three: one grid, two
+  tables, and without this they join.
+- **At least one side is a table.** Two bands both too small to be one, joined, are still not
+  evidence of a table — and a band repeated at the same place on consecutive pages is page
+  furniture far more often than it is a two-row table split across a break. Without this,
+  `pdf/xerox_alta_link_…` joins a column header reprinted at the top of three chapters and
+  `vendored/pdfplumber/.../pdffill-demo.pdf` joins a `Previous Page / Next Page` navigation strip
+  to itself.
+
+**A header row alone at the foot of a page** — the shape a break leaves when a table's rows are
+all on the other side of it — is a well-formed 1x2 ruled grid, and too small for
+`MinTableCells` or for `IsRealGrid`'s two-row floor. It used to be dropped, and its words came
+out as a paragraph with the two columns' wrapped lines interleaved by reading order. Bands like
+it are now kept as *continuation candidates*: offered to the join, and dropped if nothing claims
+one. A candidate is deliberately inert everywhere else — it is held back from the vertical merge
+and the divider split (which band merges into which is sensitive to what else is in the list, and
+a band that is not a table has no business deciding that), it does not decide whether the
+intersection tier found a grid (so the cluster fallback still runs exactly where it did), and it
+does not claim its page from the heuristic tier. Each of those three was a corpus regression
+before it was a rule: `word365_structure.pdf`, `right_to_left_03.pdf` and
+`nougat_034.pdf` respectively.
+
+**Placement and coverage come apart once a table is joined.** A joined table is filed under the
+page it starts on, so the pages its rest came from carry no table of their own — and
+`FilterSegmentsByTableBboxes` would hand those rows back a second time as prose, which it did:
+every continuation row appeared twice in the rendered markdown. `PdfStructure.Build` therefore
+takes a `ruledCoverage` list beside `ruledTables`: the tables place, the fragments cover.
+
+**Corpus effect.** Measured over the same 398 PDF fixtures, joining costs two fixtures on
+`tables` and fixes two, with `ok` unchanged at 287. Both fixtures it costs were rendered and
+read, and in both **the join is right and the golden is the fragmented view**:
+
+- **`vendored/pdfplumber/.../WARN-Report-for-7-1-2015-to-03-25-2016.pdf`.** A California EDD
+  layoff report: one seven-column table running from page 1 to page 14, then a summary table over
+  pages 15 and 16. Upstream emits sixteen tables, one per page, fifteen of them headerless. The
+  port emits two.
+- **`vendored/pdfplumber/.../issue-463-example.pdf`.** A table ending at the foot of page 2 with
+  two more rows at the head of page 3. Upstream emits both halves; the port emits the table.
+- Fixed outright: `pdf/nougat_040.pdf` / `pdf/pdfa_015.pdf`.
+
 ### Still open on the reporting document
 
-- **Cross-page continuation.** Its four logical tables are still emitted as twelve per-page
-  fragments. Upstream's `stitch_fragmented_tables` groups by page and is only reachable from the
-  structure pipeline, so nothing joins a fragment at the bottom of one page to its continuation
-  at the top of the next.
-- **A header row stranded alone at a page break.** One of its tables begins with its header row
-  by itself at the foot of a page and its data rows on the next. That row is a well-formed 1x2
-  ruled grid, but two filled cells is below `MinTableCells` and one row is below `IsRealGrid`'s
-  floor, so it is not emitted at all and its words reach the output as a paragraph — with the two
-  columns' wrapped lines interleaved by reading order, which is how a two-column band reads when
-  nothing tells the text path it is a table. Recovering it needs the cross-page context above;
-  lowering either threshold to reach it would cost far more precision than it buys.
+Nothing. Its four tables come out as four tables, each with its header.
 
 ## Optional OCR (added 2026-09-09) — a deviation, not a port
 

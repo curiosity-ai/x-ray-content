@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using XRay.Content.Internal.Pdf;
 using XRay.Content.Internal.PdfOxide.Layout;
 using XRay.Content.Internal.PdfOxide.Text;
@@ -338,6 +339,119 @@ public class PdfSpatialTableTests
         var table = Assert.Single(PdfSpatialTables.DetectPageTables(spans, paths, 1, TableDetectionConfig.Strict()));
         Assert.All(table.Cells, row => Assert.Equal(3, row.Count));
         Assert.Equal(new List<string> { "Region", "Q1", "Q2" }, table.Cells[0]);
+    }
+
+    /// <summary>The same 3-column grid, with a caller-chosen set of rows.</summary>
+    private static List<PdfPath> GridPaths(params double[] rowRules)
+    {
+        var paths = new List<PdfPath>();
+        foreach (double y in rowRules) paths.Add(Line(20, y, 500, y));
+        double top = rowRules.Max(), bottom = rowRules.Min();
+        paths.Add(Line(20, bottom, 20, top));
+        paths.Add(Line(180, bottom, 180, top));
+        paths.Add(Line(340, bottom, 340, top));
+        paths.Add(Line(500, bottom, 500, top));
+        return paths;
+    }
+
+    private static List<TableSpan> Row(string a, string b, string c, double y) =>
+        new() { Word(a, 30, y), Word(b, 190, y), Word(c, 350, y) };
+
+    private static List<XRay.Content.Types.Table> Detect(
+        IEnumerable<(List<TableSpan> Spans, List<PdfPath> Paths)> pages)
+    {
+        var ruled = new List<RuledTable>();
+        uint page = 1;
+        foreach (var (spans, paths) in pages)
+            ruled.AddRange(PdfSpatialTables.DetectPageRuledTables(spans, paths, page++, TableDetectionConfig.Strict()));
+        return PdfTableContinuation.Join(ruled).Tables;
+    }
+
+    /// <summary>
+    /// A table longer than a page is one table. Every tier reads a page at a time, so its rows
+    /// arrive as a fragment per page and the header, which only the first fragment has, stops
+    /// describing the rest.
+    /// </summary>
+    [Fact]
+    public void ATableContinuedOnTheNextPageIsOneTable()
+    {
+        var first = Row("Region", "Q1", "Q2", 180).Concat(Row("North", "1,204", "1,388", 148))
+            .Concat(Row("South", "942", "1,011", 116)).Concat(Row("East", "1,655", "1,702", 84))
+            .Concat(Row("West", "803", "877", 52)).ToList();
+        var second = Row("Central", "612", "708", 180).Concat(Row("Coastal", "551", "640", 148))
+            .Concat(Row("Inland", "489", "512", 116)).Concat(Row("Northern", "377", "402", 84))
+            .Concat(Row("Southern", "298", "331", 52)).ToList();
+        var rules = new double[] { 44, 76, 108, 140, 172, 204 };
+
+        var table = Assert.Single(Detect(new[] { (first, GridPaths(rules)), (second, GridPaths(rules)) }));
+
+        Assert.Equal(1u, table.PageNumber);
+        Assert.Equal(10, table.Cells.Count);
+        Assert.Equal(new List<string> { "Region", "Q1", "Q2" }, table.Cells[0]);
+        Assert.Equal(new List<string> { "Central", "612", "708" }, table.Cells[5]);
+        Assert.Equal(new List<string> { "Southern", "298", "331" }, table.Cells[9]);
+        // One header rule, at the top, not one per page joined in.
+        Assert.Equal(1, table.Markdown.Split('\n').Count(line => line.Contains("---")));
+    }
+
+    /// <summary>
+    /// A header row left alone at the foot of a page by the break that put its rows on the next
+    /// one is too small to be a table — two filled cells, one row — so it is dropped, and the
+    /// table it belongs to loses the only row that says what its columns are.
+    /// </summary>
+    [Fact]
+    public void AHeaderStrandedByAPageBreakBecomesItsTablesFirstRow()
+    {
+        var header = Row("Region", "Q1", "Q2", 52);
+        var body = Row("North", "1,204", "1,388", 180).Concat(Row("South", "942", "1,011", 148))
+            .Concat(Row("East", "1,655", "1,702", 116)).Concat(Row("West", "803", "877", 84)).ToList();
+
+        var table = Assert.Single(Detect(new[]
+        {
+            (header, GridPaths(44, 76)),
+            (body, GridPaths(76, 108, 140, 172, 204)),
+        }));
+
+        Assert.Equal(1u, table.PageNumber);
+        Assert.Equal(new List<string> { "Region", "Q1", "Q2" }, table.Cells[0]);
+        Assert.Equal(5, table.Cells.Count);
+    }
+
+    /// <summary>
+    /// A page laid out in one grid puts every table on it, so sharing the gridlines is not being
+    /// the same table: one table in its left columns and another in its right are two tables,
+    /// however alike their geometry.
+    /// </summary>
+    [Fact]
+    public void TablesInDifferentColumnsOfOneGridAreNotJoined()
+    {
+        var left = new List<TableSpan>
+        {
+            Word("FooCol", 30, 180), Word("Foo1", 30, 148), Word("Foo2", 30, 116),
+            Word("FooB", 190, 180), Word("Foo3", 190, 148), Word("Foo4", 190, 116),
+        };
+        var right = new List<TableSpan>
+        {
+            Word("BarCol", 190, 180), Word("Bar1", 190, 148), Word("Bar2", 190, 116),
+            Word("BarB", 350, 180), Word("Bar3", 350, 148), Word("Bar4", 350, 116),
+        };
+        var rules = new double[] { 108, 140, 172, 204 };
+
+        Assert.Equal(2, Detect(new[] { (left, GridPaths(rules)), (right, GridPaths(rules)) }).Count);
+    }
+
+    /// <summary>
+    /// A band repeated at the same place on consecutive pages is page furniture — a column
+    /// header reprinted at the top of each page, a navigation strip — far more often than it is
+    /// a two-row table split across a break. Neither side being a table is what says so.
+    /// </summary>
+    [Fact]
+    public void TwoBandsTooSmallToBeTablesDoNotJoinIntoOne()
+    {
+        var furniture = Row("ERROR TYPE", "ERROR CODE", "RESOLUTION", 52);
+        var rules = new double[] { 44, 76 };
+
+        Assert.Empty(Detect(new[] { (furniture, GridPaths(rules)), (furniture, GridPaths(rules)) }));
     }
 
     [Fact]
