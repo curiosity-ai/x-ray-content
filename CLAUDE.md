@@ -134,6 +134,15 @@ opt-in and `[JsonIgnore]`, like `ExtractedDocument.FormattedContent`, so nothing
 format or the goldens changes. A page whose elements are not marked with its number — a workbook,
 whose extractor supplies `PrebuiltPages` already rendered — keeps the content it came with.
 
+#### One extraction, both shapes
+
+A caller that stores a document twice — as text to index and as markup to read — would otherwise run
+the whole pipeline twice for it. `ExtractedDocument.PlainContent` is the plain render `Derive`
+already produces on the way to every format (the formatted render is layered over it), so asking for
+markdown and reading `PlainContent` beside `Content` costs nothing extra. It matters most when the
+extraction is expensive for reasons other than parsing: the OCR pass recognises once, not twice.
+`PageContent.Content` and `PageContent.FormattedContent` are the same pair per page.
+
 `common.rs` holds shared walking state (container nesting, `is_body_element`,
 `is_container_end`, `get_language`, `handle_container_end`) — port it first; all
 renderers depend on it.

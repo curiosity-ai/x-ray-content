@@ -146,4 +146,32 @@ public sealed class PageFormattedContentTests
         Assert.Null(page.FormattedContent);
         Assert.Contains("## Sheet1", page.Content, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A markdown extraction carries the plain text too, so one extraction answers both questions.
+    /// </summary>
+    [Fact]
+    public void AFormattedExtractionAlsoCarriesThePlainText()
+    {
+        var result = Derive.DeriveExtractionResult(
+            TwoPages(), includeDocumentStructure: false, OutputFormat.Markdown);
+
+        Assert.Contains("# Chapter One", result.Content, StringComparison.Ordinal);
+        Assert.Equal(result.FormattedContent, result.Content);
+
+        Assert.NotNull(result.PlainContent);
+        Assert.Contains("Chapter One", result.PlainContent!, StringComparison.Ordinal);
+        Assert.DoesNotContain("#", result.PlainContent!, StringComparison.Ordinal);
+    }
+
+    /// <summary>A plain extraction's two contents are the same string.</summary>
+    [Fact]
+    public void APlainExtractionsPlainContentIsItsContent()
+    {
+        var result = Derive.DeriveExtractionResult(
+            TwoPages(), includeDocumentStructure: false, OutputFormat.Plain);
+
+        Assert.Null(result.FormattedContent);
+        Assert.Equal(result.Content, result.PlainContent);
+    }
 }

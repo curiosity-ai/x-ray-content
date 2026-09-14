@@ -63,6 +63,7 @@ public static class Derive
             Children = doc.Children,
             Uris = uris,
             FormattedContent = formatted,
+            PlainContent = content,
         };
         return result;
     }
