@@ -107,9 +107,9 @@ internal sealed class PaddleOcrEngine : IOcrEngine
                 new DocumentParserOptions { UseLayoutDetection = _hasLayout },
                 cancellationToken: cancellationToken);
 
-            string text = string.Join(
-                "\n\n",
-                parsed.Blocks.Select(block => block.Content.Trim()).Where(content => content.Length > 0));
+            string text = _options.TextFormat == OcrTextFormat.Markdown
+                ? Markdown(parsed)
+                : PlainLines(parsed);
 
             return new OcrImageResult(text, parsed.Blocks.Count);
         }
@@ -118,6 +118,39 @@ internal sealed class PaddleOcrEngine : IOcrEngine
             page.Dispose();
         }
     }
+
+    /// <summary>
+    /// The page as markdown — the recognizer's own rendering, which is what makes a recognised
+    /// heading a heading, a formula LaTeX and a table a table.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Title levels are assigned across the whole page before rendering, because how deep a
+    /// heading sits is decided partly by how its size compares with the other headings'
+    /// (<c>assign_levels_to_parsing_res</c>). A single recognised image usually holds one
+    /// heading at most, so this rarely changes anything — but it costs nothing and is what the
+    /// shipped pipeline does.
+    /// </para>
+    /// <para>
+    /// Rendered plain rather than the pipeline's "pretty" default, which centres every figure and
+    /// caption in a <c>div</c> and styles each table's borders inline. Those decorations are for a
+    /// standalone page of HTML; here the text is spliced into a document the library is rendering
+    /// as markdown, next to markdown its own extractors produced.
+    /// </para>
+    /// </remarks>
+    private static string Markdown(ParsedPage parsed) =>
+        new ParsedDocument([parsed])
+            .AssignTitleLevels()
+            .ToMarkdown(MarkdownOptions.Default with { Pretty = false })
+            .Trim();
+
+    /// <summary>
+    /// The page as plain lines: each region's text, in reading order, separated by a blank line.
+    /// </summary>
+    private static string PlainLines(ParsedPage parsed) =>
+        string.Join(
+            "\n\n",
+            parsed.Blocks.Select(block => block.Content.Trim()).Where(content => content.Length > 0));
 
     public void Dispose()
     {

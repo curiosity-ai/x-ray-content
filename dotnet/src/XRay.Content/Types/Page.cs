@@ -39,6 +39,20 @@ public sealed class PageContent
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SheetName { get; set; }
+
+    /// <summary>
+    /// This page rendered in the extraction's output format, when
+    /// <see cref="XRay.Content.Core.ExtractionConfig.RenderPagesInOutputFormat"/> asked for it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Content"/> is a concatenation of the page's element texts and is not the
+    /// document's markup — a heading loses its hashes, and a table, whose element carries no text,
+    /// disappears. This is the page as the document's own renderer writes it, so a caller can have
+    /// both the markup and the page it came from. Not part of the wire format, like
+    /// <see cref="ExtractedDocument.FormattedContent"/>.
+    /// </remarks>
+    [JsonIgnore]
+    public string? FormattedContent { get; set; }
 }
 
 /// <summary>

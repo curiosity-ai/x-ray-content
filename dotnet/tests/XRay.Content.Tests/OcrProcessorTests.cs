@@ -229,6 +229,65 @@ public sealed class OcrProcessorTests
         Assert.Empty(OcrTexts(doc));
     }
 
+    /// <summary>
+    /// A separator rule clears the area floor on width alone, and holds no text; the dimension
+    /// floor is what catches it.
+    /// </summary>
+    [Fact]
+    public void AnImageThinnerThanTheDimensionFloorIsSkipped()
+    {
+        var doc = DocumentWithImage();
+        doc.Images[0].Width = 2000;
+        doc.Images[0].Height = 3;
+        var engine = new FakeEngine();
+
+        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
+            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } }, _ => engine);
+
+        Assert.True((long)2000 * 3 > new OcrOptions().MinImagePixels, "the area floor alone would let this through");
+        Assert.Empty(engine.Calls);
+    }
+
+    /// <summary>
+    /// An image past the pixel ceiling is skipped: it is decoded in full before the recognizer
+    /// downsamples it, so a poster-sized scan costs more memory than the document it sits in.
+    /// </summary>
+    [Fact]
+    public void AnImageAboveThePixelCeilingIsSkipped()
+    {
+        var doc = DocumentWithImage();
+        doc.Images[0].Width = 30_000;
+        doc.Images[0].Height = 30_000;
+        var engine = new FakeEngine();
+
+        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
+            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } }, _ => engine);
+
+        Assert.Empty(engine.Calls);
+    }
+
+    /// <summary>
+    /// The byte ceiling is the only one that applies to an image of unknown size, which is most
+    /// of them — so it has to hold without any dimensions recorded.
+    /// </summary>
+    [Fact]
+    public void AnImageAboveTheByteCeilingIsSkippedEvenUnmeasured()
+    {
+        var doc = DocumentWithImage(imageBytes: 4096);
+        doc.Images[0].Width = null;
+        doc.Images[0].Height = null;
+        var engine = new FakeEngine();
+
+        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
+            new ExtractionConfig
+            {
+                Ocr = new OcrOptions { Mode = OcrMode.AllImages, MaxImageBytes = 1024 },
+            },
+            _ => engine);
+
+        Assert.Empty(engine.Calls);
+    }
+
     /// <summary>An image of unknown size is recognised rather than skipped — several extractors
     /// record no dimensions, and dropping those would silently disable the mode for them.</summary>
     [Fact]
@@ -416,6 +475,91 @@ public sealed class OcrProcessorTests
         var result = Derive.DeriveExtractionResult(
             doc, includeDocumentStructure: false, OutputFormat.Plain);
         Assert.Equal(ExtractionMethod.Mixed, result.ExtractionMethod);
+    }
+    // ── text format ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A markdown extraction gets markdown-shaped recognition, and the renderer passes it
+    /// through rather than escaping it — the difference between a recognised heading and the
+    /// literal text <c>\## Heading</c>.
+    /// </summary>
+    [Fact]
+    public void MarkdownOutputKeepsTheRecognisedMarkupIntact()
+    {
+        var doc = DocumentWithImage();
+
+        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
+            new ExtractionConfig { OutputFormat = OutputFormat.Markdown, Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
+            options =>
+            {
+                Assert.Equal(OcrTextFormat.Markdown, options.TextFormat);
+                return new FakeEngine(_ => new OcrImageResult("## Heading\n\n| a | b |\n| - | - |\n| 1 | 2 |", 2));
+            });
+
+        string content = Derive.DeriveExtractionResult(
+            doc, includeDocumentStructure: false, OutputFormat.Markdown).Content;
+
+        Assert.Contains("## Heading", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\#", content, StringComparison.Ordinal);
+        Assert.Contains("| a | b |", content, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A plain extraction asks for plain lines and marks nothing, so the markdown renderer keeps
+    /// treating recognised text as a paragraph's words.
+    /// </summary>
+    [Fact]
+    public void APlainExtractionAsksForPlainText()
+    {
+        var doc = DocumentWithImage();
+
+        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
+            new ExtractionConfig { Ocr = new OcrOptions { Mode = OcrMode.AllImages } },
+            options =>
+            {
+                Assert.Equal(OcrTextFormat.PlainText, options.TextFormat);
+                return new FakeEngine();
+            });
+
+        var ocr = Assert.Single(doc.Elements.Where(e => e.Kind.Tag == ElementKindTag.OcrText));
+        Assert.True(ocr.Attributes is null || !ocr.Attributes.ContainsKey("ocr_format"));
+    }
+
+    /// <summary>An explicit choice wins over the output format it would otherwise follow.</summary>
+    [Fact]
+    public void AnExplicitTextFormatOverridesTheOutputFormat()
+    {
+        var doc = DocumentWithImage();
+
+        OcrProcessor.Process(doc, Array.Empty<byte>(), PngMime,
+            new ExtractionConfig
+            {
+                OutputFormat = OutputFormat.Markdown,
+                Ocr = new OcrOptions { Mode = OcrMode.AllImages, TextFormat = OcrTextFormat.PlainText },
+            },
+            options =>
+            {
+                Assert.Equal(OcrTextFormat.PlainText, options.TextFormat);
+                return new FakeEngine();
+            });
+
+        Assert.Single(OcrTexts(doc));
+    }
+
+    /// <summary>
+    /// Resolving the format for one document must not decide the next one's: the options object
+    /// belongs to the caller's config and is routinely reused across extractions.
+    /// </summary>
+    [Fact]
+    public void ResolvingTheFormatLeavesTheCallersOptionsAlone()
+    {
+        var options = new OcrOptions { Mode = OcrMode.AllImages };
+
+        OcrProcessor.Process(DocumentWithImage(), Array.Empty<byte>(), PngMime,
+            new ExtractionConfig { OutputFormat = OutputFormat.Markdown, Ocr = options },
+            _ => new FakeEngine());
+
+        Assert.Equal(OcrTextFormat.Auto, options.TextFormat);
     }
 
     // ── The extractor/pass seam for a standalone image ───────────────────────

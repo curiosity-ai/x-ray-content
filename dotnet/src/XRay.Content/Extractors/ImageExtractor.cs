@@ -59,13 +59,18 @@ public sealed class ImageExtractor : IExtractor
 
         if (config.NeedsImageData())
         {
+            bool measured = imageMeta.Width > 0 && imageMeta.Height > 0;
+
             builder.PushImage(null, new ExtractedImage
             {
                 Data = bytes,
                 Format = imageMeta.Format,
                 ImageIndex = 0,
-                Width = imageMeta.Width,
-                Height = imageMeta.Height,
+                // Left unset when the dimensions could not be read — a HEIF container's often
+                // cannot — because zero would read as "smaller than the floor" to the OCR pass's
+                // size filter and skip the image, where unknown means "recognise it anyway".
+                Width = measured ? imageMeta.Width : null,
+                Height = measured ? imageMeta.Height : null,
                 IsMask = false,
                 // image_kind::classify is skipped, as in the other extractors: the classifier is
                 // not ported, so ImageKind / KindConfidence stay null.
@@ -88,6 +93,7 @@ public sealed class ImageExtractor : IExtractor
         var doc = builder.Build();
         doc.Metadata = new Metadata { Format = FormatMetadata.Image(imageMeta) };
         doc.MimeType = mimeType;
+
         return doc;
     }
 

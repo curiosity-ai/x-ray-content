@@ -9,15 +9,19 @@ namespace XRay.Content.Core;
 ///
 /// Deferred (documented in PORT_NOTES): OCR element building, chunking, embeddings, keyword
 /// extraction, LLM usage, tree-sitter code intelligence, element-based output (`elements`),
-/// and per-page re-render in the requested markup (pages keep their plain content). The Rust
+/// and element-based output (`elements`). The Rust
 /// pipeline's later `content = formatted_content` swap is folded in here so `Content` already
 /// reflects the requested output format.
+///
+/// Per-page re-render in the requested markup is opt-in — see
+/// <see cref="ExtractionConfig.RenderPagesInOutputFormat"/> — because the plain per-page content
+/// is what upstream produces and what the goldens pin.
 /// </summary>
 public static class Derive
 {
     public static ExtractedDocument DeriveExtractionResult(
         InternalDocument doc, bool includeDocumentStructure, OutputFormat outputFormat,
-        HtmlOutputConfig? htmlOutput = null)
+        HtmlOutputConfig? htmlOutput = null, bool renderPagesInOutputFormat = false)
     {
         ResolveRelationships(doc);
 
@@ -30,6 +34,12 @@ public static class Derive
         string? formatted = RenderFormatted(doc, outputFormat, htmlOutput);
 
         List<PageContent>? pages = doc.PrebuiltPages ?? BuildPages(doc);
+
+        // Not for a page the extractor prebuilt: that content is already rendered, and it carries
+        // what the element stream does not — a sheet's name as its heading, say — so re-rendering
+        // the page's elements would lose it.
+        if (renderPagesInOutputFormat && pages is not null && formatted is not null && doc.PrebuiltPages is null)
+            RenderPagesFormatted(doc, pages, outputFormat, htmlOutput);
 
         DocumentStructure? document = includeDocumentStructure ? DeriveDocumentStructure(doc) : null;
 
@@ -53,8 +63,60 @@ public static class Derive
             Children = doc.Children,
             Uris = uris,
             FormattedContent = formatted,
+            PlainContent = content,
         };
         return result;
+    }
+
+    /// <summary>
+    /// Render each page's own elements in the requested output format, into
+    /// <see cref="PageContent.FormattedContent"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="PageContent.Content"/> is a concatenation of the page's element texts, which is
+    /// what upstream produces — and it is not the document's markup: a heading loses its hashes
+    /// and a table, whose element carries no text at all, disappears entirely. A caller that
+    /// wants the document as markdown *and* wants to know which page each part came from could
+    /// therefore have one or the other, and had to re-extract a page at a time to get both.
+    /// </para>
+    /// <para>
+    /// Each page is rendered from a slice of the document carrying only that page's elements, so
+    /// the renderer resolves tables and images through the same indices. A page whose elements are
+    /// not marked with its number keeps the content it came with, and a document whose extractor
+    /// supplied <see cref="InternalDocument.PrebuiltPages"/> is skipped entirely: those pages are
+    /// already rendered, and they carry what the element stream does not.
+    /// </para>
+    /// </remarks>
+    private static void RenderPagesFormatted(
+        InternalDocument doc, List<PageContent> pages, OutputFormat outputFormat,
+        HtmlOutputConfig? htmlOutput)
+    {
+        var byPage = new Dictionary<uint, List<InternalElement>>();
+        foreach (var elem in doc.Elements)
+        {
+            if (elem.Page is not uint page) continue;
+            if (!byPage.TryGetValue(page, out var list)) byPage[page] = list = new List<InternalElement>();
+            list.Add(elem);
+        }
+
+        foreach (var page in pages)
+        {
+            if (!byPage.TryGetValue(page.PageNumber, out var elements)) continue;
+
+            var slice = new InternalDocument(doc.SourceFormat)
+            {
+                MimeType = doc.MimeType,
+                Metadata = doc.Metadata,
+            };
+            // By reference and in full, because an element addresses a table or an image by its
+            // index in the whole document.
+            slice.Tables.AddRange(doc.Tables);
+            slice.Images.AddRange(doc.Images);
+            slice.Elements.AddRange(elements);
+
+            page.FormattedContent = RenderFormatted(slice, outputFormat, htmlOutput) ?? page.Content;
+        }
     }
 
     private static string? RenderFormatted(

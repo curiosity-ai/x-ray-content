@@ -86,6 +86,19 @@ public sealed class ExtractionConfig
     public bool IncludeDocumentStructure { get; set; }
 
     /// <summary>
+    /// Also render each page in <see cref="OutputFormat"/>, into
+    /// <see cref="Types.PageContent.FormattedContent"/>.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, and not part of the wire format: a page's <see cref="Types.PageContent.Content"/>
+    /// is the concatenation of its element texts, which is what upstream produces and what the
+    /// goldens pin. Turning this on costs one extra render per page and is what a caller needs to
+    /// have the document as markup *and* know which page each part came from.
+    /// </remarks>
+    [JsonIgnore]
+    public bool RenderPagesInOutputFormat { get; set; }
+
+    /// <summary>
     /// Keep the bytes of the images an extractor finds, in <c>ExtractedDocument.Images</c>.
     /// </summary>
     /// <remarks>

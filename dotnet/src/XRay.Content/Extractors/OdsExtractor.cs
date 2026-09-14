@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using XRay.Content.Core;
+using XRay.Content.Core.Ocr;
 using XRay.Content.Types;
 using XRay.Content.Internal.Odf;
 
@@ -73,6 +74,7 @@ public sealed class OdsExtractor : IExtractor
             Authors = Blank(author) is { } a ? new List<string> { a } : null,
             Additional = additional,
         };
+        OcrImageSource.AddPicturesFromZip(doc, bytes, config, "Pictures/");
         return doc;
     }
 

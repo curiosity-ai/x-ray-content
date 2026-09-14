@@ -43,8 +43,12 @@ internal static class OcrProcessor
         ExtractionConfig config,
         Func<OcrOptions, IOcrEngine>? engineFactory = null)
     {
-        var options = config.Ocr;
-        if (options is null || options.Mode == OcrMode.Disabled) return;
+        var configured = config.Ocr;
+        if (configured is null || configured.Mode == OcrMode.Disabled) return;
+
+        // Resolved once, here, because this is the only place that can see both the OCR settings
+        // and the format the document is being rendered to.
+        var options = configured.WithTextFormat(ResolveTextFormat(configured, config.OutputFormat));
 
         // Work out what there is to do before loading any weights: a document with no scanned
         // page and no image must not pay for a checkpoint it will not use.
@@ -98,24 +102,75 @@ internal static class OcrProcessor
             : Array.Empty<uint>();
 
     /// <summary>
-    /// Which images are worth recognising: those that carry bytes, are big enough to hold text,
-    /// and fall inside the per-document ceiling.
+    /// Which images are worth recognising: those that carry bytes, are the right size to hold
+    /// text, and fall inside the per-document ceiling.
     /// </summary>
     private static int[] ImageTargets(InternalDocument doc, OcrOptions options)
     {
         var targets = new List<int>();
         for (int i = 0; i < doc.Images.Count && targets.Count < options.MaxImages; i++)
         {
-            var image = doc.Images[i];
-            if (image.Data.Length == 0) continue;
-            // Dimensions are advisory — several extractors do not record them — so an image of
-            // unknown size is recognised rather than skipped. Only a known-small one is dropped.
-            if (image.Width is { } w && image.Height is { } h && (long)w * h < options.MinImagePixels)
-                continue;
+            if (!IsWorthRecognising(doc.Images[i], options)) continue;
             targets.Add(i);
         }
         return targets.ToArray();
     }
+
+    /// <summary>
+    /// Whether one image is the right size to be worth reading.
+    /// </summary>
+    /// <remarks>
+    /// Both ends matter and for different reasons. Below the floor there is nothing to read: an
+    /// icon, a bullet, a separator rule and a spacer GIF are all images, and recognising them
+    /// costs time and yields noise. Above the ceiling the image is decoded in full — into a
+    /// buffer proportional to its pixel count — before the recognizer downsamples it to its own
+    /// budget, so one poster-sized scan can cost more memory than the whole rest of the document.
+    /// <para>
+    /// Dimensions are advisory: several extractors record none, and an image of unknown size is
+    /// recognised rather than skipped, because dropping those would silently disable the mode for
+    /// the formats that do not measure their images. <see cref="OcrOptions.MaxImageBytes"/> is
+    /// what bounds those, since the encoded length is always known.
+    /// </para>
+    /// </remarks>
+    private static bool IsWorthRecognising(ExtractedImage image, OcrOptions options)
+    {
+        if (image.Data.Length == 0) return false;
+        if (image.Data.Length > options.MaxImageBytes) return false;
+
+        if (image.Width is not { } width || image.Height is not { } height) return true;
+
+        long pixels = (long)width * height;
+        if (pixels < options.MinImagePixels || pixels > options.MaxImagePixels) return false;
+        return Math.Min(width, height) >= options.MinImageDimension;
+    }
+
+    /// <summary>
+    /// What <see cref="OcrTextFormat.Auto"/> means for a given output format: markdown where the
+    /// document is being rendered as markup, plain lines everywhere else.
+    /// </summary>
+    /// <remarks>
+    /// HTML counts as markup because its renderer reaches the recognised text through the same
+    /// markdown AST. Djot counts because its renderer emits the text as a verbatim block, so
+    /// markup survives it; its own syntax differs from markdown in places, but markdown is the
+    /// closer of the two shapes on offer.
+    /// </remarks>
+    private static OcrTextFormat ResolveTextFormat(OcrOptions options, OutputFormat output)
+    {
+        if (options.TextFormat != OcrTextFormat.Auto) return options.TextFormat;
+
+        return output.Which switch
+        {
+            OutputFormat.Kind.Markdown or OutputFormat.Kind.Html or OutputFormat.Kind.Djot
+                => OcrTextFormat.Markdown,
+            _ => OcrTextFormat.PlainText,
+        };
+    }
+
+    /// <summary>
+    /// Element attribute naming the shape of a recognised text element, read by the markdown
+    /// renderer. Shared with <c>ComrakBridge</c>, which is the only reader.
+    /// </summary>
+    internal const string MarkdownAttribute = "ocr_format";
 
     /// <summary>
     /// Rasterise each flagged page and append what it says, as a page-level OCR element.
@@ -146,7 +201,7 @@ internal static class OcrProcessor
             if (!TryRecognize(doc, engine, png, options, $"page {page}", out var result)) break;
             if (!result.HasText) continue;
 
-            var elements = ElementsFor(doc, result.Text, OcrElementLevel.Page, page);
+            var elements = ElementsFor(doc, result.Text, OcrElementLevel.Page, page, options);
             if (elements.Count == 0) continue;
             doc.Elements.AddRange(elements);
             recognized++;
@@ -181,7 +236,7 @@ internal static class OcrProcessor
             int host = doc.Elements.FindIndex(e =>
                 e.Kind.Tag == ElementKindTag.Image && e.Kind.ImageIndex == (uint)imageIndex);
             var elements = ElementsFor(
-                doc, result.Text, OcrElementLevel.Block, host >= 0 ? doc.Elements[host].Page : null);
+                doc, result.Text, OcrElementLevel.Block, host >= 0 ? doc.Elements[host].Page : null, options);
             if (elements.Count == 0) continue;
 
             if (host >= 0)
@@ -213,9 +268,15 @@ internal static class OcrProcessor
     /// representation, is what lets Markdown write a pipe table, HTML write a real
     /// <c>&lt;table&gt;</c>, and plain text write neither's tags; it also puts the table in
     /// <c>ExtractedDocument.Tables</c>, where a consumer already looks for one.
+    /// <para>
+    /// What is left over is text, and markdown-shaped text is marked as such, because the markdown
+    /// renderer has to know: text it treats as a paragraph's words gets escaped, which turns a
+    /// recognised heading into <c>\## Heading</c>. Every other renderer ignores the marker and
+    /// emits the text as it stands.
+    /// </para>
     /// </remarks>
     private static List<InternalElement> ElementsFor(
-        InternalDocument doc, string text, OcrElementLevel level, uint? page)
+        InternalDocument doc, string text, OcrElementLevel level, uint? page, OcrOptions options)
     {
         var elements = new List<InternalElement>();
 
@@ -235,6 +296,12 @@ internal static class OcrProcessor
             else
             {
                 element = InternalElement.TextElement(ElementKind.OcrText(level), segment.Text, 0);
+
+                if (options.TextFormat == OcrTextFormat.Markdown)
+                {
+                    element.Attributes ??= new Dictionary<string, string>();
+                    element.Attributes[MarkdownAttribute] = "markdown";
+                }
             }
 
             element.Page = page;

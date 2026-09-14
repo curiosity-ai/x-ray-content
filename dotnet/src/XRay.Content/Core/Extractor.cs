@@ -44,7 +44,8 @@ public sealed class Extractor
                 // places it inline rather than appending it to the end of the document.
                 Ocr.OcrProcessor.Process(internalDoc, bytes, mimeType, config);
                 var extracted = Derive.DeriveExtractionResult(
-                    internalDoc, config.IncludeDocumentStructure, config.OutputFormat, config.HtmlOutput);
+                    internalDoc, config.IncludeDocumentStructure, config.OutputFormat, config.HtmlOutput,
+                    config.RenderPagesInOutputFormat);
                 // Record the format the content was rendered in (Rust `pipeline::format`).
                 // Set after derive so the extractor-supplied value the renderer consults for
                 // `PreRenderedContent` is not disturbed.

@@ -119,6 +119,30 @@ Rust: `.reference/crates/xberg/src/rendering/`. One function per output format, 
 | Djot | `djot.rs` | Djot markup. |
 | JSON tree | `json.rs` | Heading-driven section tree (`JsonDocument`/`JsonNode`). Port verbatim — it is simple and self-contained. |
 
+#### Rendering a page on its own
+
+A `PageContent.Content` is the concatenation of that page's element texts, which is what upstream
+produces and what the goldens pin — and it is *not* the document's markup: a heading loses its
+hashes, and a table, whose element carries no text at all, disappears entirely. So a caller who
+wanted the document as markdown **and** wanted to know which page each part came from could have
+one or the other, and the only way to have both was to re-extract a page at a time.
+
+`ExtractionConfig.RenderPagesInOutputFormat` fills `PageContent.FormattedContent` with the page
+rendered by the same renderer the document used, from a slice carrying only that page's elements
+(and the whole document's tables and images, because an element addresses those by index). It is
+opt-in and `[JsonIgnore]`, like `ExtractedDocument.FormattedContent`, so nothing about the wire
+format or the goldens changes. A page whose elements are not marked with its number — a workbook,
+whose extractor supplies `PrebuiltPages` already rendered — keeps the content it came with.
+
+#### One extraction, both shapes
+
+A caller that stores a document twice — as text to index and as markup to read — would otherwise run
+the whole pipeline twice for it. `ExtractedDocument.PlainContent` is the plain render `Derive`
+already produces on the way to every format (the formatted render is layered over it), so asking for
+markdown and reading `PlainContent` beside `Content` costs nothing extra. It matters most when the
+extraction is expensive for reasons other than parsing: the OCR pass recognises once, not twice.
+`PageContent.Content` and `PageContent.FormattedContent` are the same pair per page.
+
 `common.rs` holds shared walking state (container nesting, `is_body_element`,
 `is_container_end`, `get_language`, `handle_container_end`) — port it first; all
 renderers depend on it.
@@ -439,7 +463,72 @@ deviation rather than a port:
 |---|---|
 | `Disabled` | Nothing. No model is resolved, no native library is touched. |
 | `ScanOnly` | Pages a PDF's scan detector flagged (`PdfMetadata.ScannedPages`, from the existing `PdfScanDetect`). The pages are rasterised at `Dpi` and recognised whole; the text is **appended** as a page-level `OcrText` element carrying its `Page`, because a whole page's recognition has no single element to sit after. |
-| `AllImages` | Every embedded image that carries bytes and clears `MinImagePixels`, plus the `ScanOnly` behaviour for PDFs. Each image's text is **inserted immediately after the `Image` element that references it**, so every renderer places it inline for free. An image no element references is appended rather than dropped. Selecting it makes `ExtractionConfig.NeedsImageData()` true, which is what gets a standalone image file's bytes attached for the pass to find — see below. |
+| `AllImages` | Every embedded image that carries bytes and passes the size filters below, plus the `ScanOnly` behaviour for PDFs. Each image's text is **inserted immediately after the `Image` element that references it**, so every renderer places it inline for free. An image no element references is appended rather than dropped. Selecting it makes `ExtractionConfig.NeedsImageData()` true, which is what gets a standalone image file's bytes attached for the pass to find — see below. |
+
+### The bytes have to be there, and mostly are not
+
+The pass reads `InternalDocument.Images`, and an entry with no `Data` is skipped. Most extractors
+record their images as *references* — an index, an alt text, a part name — because that is all the
+renderers need, and reading every embedded picture out of a container costs memory an ordinary
+extraction has no use for. So `AllImages` used to find nothing to read in a DOCX, a deck, a
+workbook, an ODF document, or — the case that surprises most — a plain image file, whose
+`ImageExtractor` document is metadata plus one `Image` element and no bytes at all.
+
+`OcrImageSource` (`Core/Ocr/`) is what closes that, and **only when the mode asked for images**,
+which is what keeps every golden fixture byte-identical:
+
+- `AttachBytes` fills in the `Data` of images the document already lists, reading each one's part
+  by the `SourcePath` recorded on it. DOCX uses this: its relationship targets are `word/`-relative,
+  so the image keeps its placeholder identity — and therefore its position in the element stream,
+  and therefore inline placement.
+- `AddPicturesFromZip` adds every picture stored under a media folder that the document does not
+  already carry. PPTX (`ppt/media/`), XLSX (`xl/media/`), ODT/ODP/ODS (`Pictures/`) use this,
+  because their extractors record no images at all. These arrive unreferenced, so their text is
+  appended rather than inlined — the documented behaviour for an unreferenced image.
+- A standalone image file is not `OcrImageSource`'s at all: `AllImages` makes
+  `ExtractionConfig.NeedsImageData()` true and `ImageExtractor` attaches the file's own bytes
+  as it builds the document.
+
+**PDF is the gap.** The port's PDF reader does not extract embedded images, so `AllImages` adds
+nothing for one; a scanned PDF is covered by `ScanOnly`, and a text PDF with a figure in it is not
+covered at all.
+
+### Filtering by size
+
+Both ends of the range matter, for different reasons, and `OcrOptions` carries all four knobs:
+
+| | Default | Why |
+|---|---|---|
+| `MinImagePixels` | 4,096 (64x64) | An icon, a bullet, a spacer GIF: nothing to read, and recognising it costs time and yields noise. |
+| `MinImageDimension` | 32 px | A separator rule is 2000x3 and clears the area floor on width alone. |
+| `MaxImagePixels` | 50,000,000 | The image is decoded in full before the recognizer downsamples it to its own budget, so one poster-sized scan can cost more memory than the whole document. The default leaves room for A3 at 600 dpi. |
+| `MaxImageBytes` | 32 MiB | The only ceiling that applies to an image of unknown size, which is most of them. |
+
+Dimensions are advisory — several extractors record none — so an image of **unknown** size is
+recognised rather than skipped; dropping those would silently disable the mode for the formats
+that do not measure their images. That is why the byte ceiling exists alongside the pixel one.
+
+### Plain lines or markdown
+
+`OcrOptions.TextFormat` decides the shape of the recognised text, and defaults to `Auto`, which
+follows the extraction's own `OutputFormat`: markdown for `Markdown` and `Html` (whose renderer
+reaches the text through the same markdown AST) and for `Djot` (whose renderer emits it as a
+verbatim block), plain lines for everything else. `PlainText` and `Markdown` override that.
+
+Markdown means the recognizer's own rendering — `ParsedPage.ToMarkdown`, which is what makes a
+recognised heading a heading, a formula LaTeX and a table a table — asked for plain rather than
+the pipeline's "pretty" default, because those decorations are for a standalone page of HTML and
+this text is spliced into a document being rendered as markdown.
+
+Two mechanics hold it together:
+
+- **`OcrProcessor` resolves `Auto` and hands the engine a *copy*** (`OcrOptions.WithTextFormat`).
+  The options object belongs to the caller's `ExtractionConfig` and is routinely reused, so
+  resolving one document's format must not decide the next one's.
+- **The element says it is markdown**, through an `ocr_format` attribute that `ComrakBridge` reads
+  and answers with a raw node. Without it the markdown renderer treats the text as a paragraph's
+  words and escapes it, which turns a recognised heading into `\## Heading` and a recognised table
+  into its own source. Every other renderer ignores the attribute.
 
 ### Tables come back as tables, not as markup
 
@@ -509,6 +598,9 @@ Note this differs from `QrPostProcessor`, which runs after rendering.
   cache warmed out of band works unconfigured. A missing checkpoint raises
   `OcrUnavailableException` — the pass will not pull gigabytes as a side effect of an
   extraction call.
+- **Extraction output is unchanged with OCR off.** Everything the pass needs that an ordinary
+  extraction does not — the image bytes above, above all — is gated on the mode, so the goldens
+  pin the same documents they always did.
 - **A recognised table is a table.** It goes into `InternalDocument.Tables` behind a `Table`
   element rather than staying HTML in a text element, so the output format decides how it is
   written. See [Tables come back as tables](#tables-come-back-as-tables-not-as-markup).
@@ -530,6 +622,21 @@ a hand-built document has whatever images the test gave it, which is precisely w
 `AllImagesRecognisesAStandaloneImageFile` therefore runs the real `ImageExtractor` and then the
 pass. Keep that one end to end.
 
+The recognizer itself is exercised by hand, against the real checkpoint, because nothing else can:
+
+```sh
+# stage the checkpoints once (~2 GB), into the cache root the engine consults
+#   ~/.cache/paddleocr-sharp/PaddleOCR-VL-1.6/main/  and  .../PP-DocLayoutV3/main/
+# then, from a console app referencing the project:
+#   new Extractor().Extract(ExtractInput.FromUri(path),
+#       new ExtractionConfig { OutputFormat = OutputFormat.Markdown,
+#                              Ocr = new OcrOptions { Mode = OcrMode.AllImages } })
+```
+
+Measured on four cores: about 15 s for a single-line image, 80 s for a dense page with a table,
+and roughly two minutes per page of a scan — which is why `PerImageTimeout` defaults to two
+minutes and why a caller with a page budget should set its own.
+
 ### The PaddleOCR packages are binary-fragile — bump both, and rebuild
 
 `PdfRasterizer.Render` gained an optional `maxPagePixels` parameter in `PaddleOCR.Pdf`
@@ -540,3 +647,4 @@ so a consumer whose graph resolves the newer package gets a `MissingMethodExcept
 symptom is a scanned PDF that quietly reads empty and an OCR pass that looks much *faster*.
 Keep `PaddleOCR` and `PaddleOCR.Pdf` on the same version, and publish a rebuilt package when
 they move.
+

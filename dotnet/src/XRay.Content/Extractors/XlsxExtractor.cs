@@ -1,5 +1,6 @@
 using System.Text.Json;
 using XRay.Content.Core;
+using XRay.Content.Core.Ocr;
 using XRay.Content.Internal.Ooxml;
 using XRay.Content.Types;
 
@@ -61,6 +62,9 @@ public sealed class XlsxExtractor : IExtractor
         TableBudget.ChargeSheets(SecurityBudget.FromConfig(config), workbook.Sheets.Select(sh => sh.TableCells));
         var doc = WorkbookToInternalDocument(workbook);
         doc.MimeType = mimeType;
+        // A workbook's pictures are not cells, so nothing above records them; the OCR pass reads
+        // them off the document. `xl/media/` is the OOXML store, `Pictures/` the ODF one.
+        OcrImageSource.AddPicturesFromZip(doc, content, config, "xl/media/", "Pictures/");
         return doc;
     }
 

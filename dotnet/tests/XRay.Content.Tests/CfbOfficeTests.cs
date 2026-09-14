@@ -119,7 +119,8 @@ public sealed class CfbOfficeTests
         Assert.Single(doc.Tables);
         var cells = doc.Tables[0].Cells;
         Assert.Equal("Item", cells[0][0]);
-        Assert.Contains("192000", cells[1]);
+        // Rendered through the cell's number format, as the sheet displays it.
+        Assert.Contains("$192,000", cells[1]);
         var excel = Assert.IsType<ExcelMetadata>(doc.Metadata.Format!.Payload);
         Assert.Equal(new List<string> { "Sheet1" }, excel.SheetNames);
     }

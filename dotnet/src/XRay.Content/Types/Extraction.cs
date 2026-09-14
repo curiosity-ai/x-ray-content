@@ -249,4 +249,19 @@ public sealed class ExtractedDocument
     /// <summary>Per-format render produced by derive; the pipeline swaps it into <see cref="Content"/>.</summary>
     [JsonIgnore]
     public string? FormattedContent { get; set; }
+
+    /// <summary>
+    /// The document as plain text, whatever <see cref="ExtractionConfig.OutputFormat"/> asked for.
+    /// </summary>
+    /// <remarks>
+    /// Derive renders plain text on the way to every format — the formatted render is layered over
+    /// it — so a caller that wants the document in markup *and* as text can have both out of one
+    /// extraction instead of running the whole pipeline twice. That matters most when the
+    /// extraction is expensive for reasons other than parsing: the OCR pass recognises once.
+    /// It is the same string as <see cref="Content"/> when the output format is plain, and
+    /// <c>[JsonIgnore]</c> like <see cref="FormattedContent"/>, so nothing about the wire format
+    /// changes.
+    /// </remarks>
+    [JsonIgnore]
+    public string? PlainContent { get; set; }
 }

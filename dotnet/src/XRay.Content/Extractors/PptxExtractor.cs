@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using XRay.Content.Core;
+using XRay.Content.Core.Ocr;
 using XRay.Content.Internal.Ooxml;
 using XRay.Content.Types;
 
@@ -33,7 +34,11 @@ public sealed class PptxExtractor : IExtractor
     {
         bool plain = config.OutputFormat.Equals(OutputFormat.Plain);
         var result = PptxReader.Extract(content, plain, injectPlaceholders: true, config.SecurityLimits);
-        return BuildDocumentFromResult(result, mimeType, config.SecurityLimits);
+        var doc = BuildDocumentFromResult(result, mimeType, config.SecurityLimits);
+        // A slide's pictures are not part of what the reader emits, so the OCR pass would find
+        // nothing to read in a deck of screenshots without this.
+        OcrImageSource.AddPicturesFromZip(doc, content, config, "ppt/media/");
+        return doc;
     }
 
     private static InternalDocument BuildDocumentFromResult(PptxResult result, string mimeType, SecurityLimits? limits)

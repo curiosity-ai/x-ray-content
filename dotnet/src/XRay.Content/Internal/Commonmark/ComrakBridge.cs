@@ -1,5 +1,6 @@
 using System.Text;
 using XRay.Content.Rendering;
+using XRay.Content.Core.Ocr;
 using XRay.Content.Types;
 
 namespace XRay.Content.Internal.Commonmark;
@@ -383,6 +384,16 @@ internal static class ComrakBridge
                 {
                     if (elemText.Length > 0)
                     {
+                        // Recognised text the OCR pass marked as markdown goes through verbatim:
+                        // as a paragraph's words it would be escaped, turning a recognised heading
+                        // into `\## Heading` and a recognised table into its own source.
+                        if (elemAttributes is { } attributes
+                            && attributes.ContainsKey(OcrProcessor.MarkdownAttribute))
+                        {
+                            parent.Append(new MdNode(NodeType.Raw) { Literal = elemText });
+                            break;
+                        }
+
                         var para = new MdNode(NodeType.Paragraph);
                         BuildInlines(para, elemText, elemAnnotations);
                         parent.Append(para);

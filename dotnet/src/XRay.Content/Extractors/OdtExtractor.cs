@@ -5,6 +5,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using XRay.Content.Core;
+using XRay.Content.Core.Ocr;
 using XRay.Content.Internal.Odf;
 using XRay.Content.Types;
 
@@ -41,6 +42,7 @@ public sealed class OdtExtractor : IExtractor
         }
 
         doc.Metadata = BuildMetadata(props);
+        OcrImageSource.AddPicturesFromZip(doc, bytes, config, "Pictures/");
         return doc;
     }
 

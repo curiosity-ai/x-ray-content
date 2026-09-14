@@ -28,6 +28,30 @@ public enum OcrMode
 }
 
 /// <summary>
+/// The shape the recognised text takes.
+/// </summary>
+/// <remarks>
+/// The recognizer reads a region at a time and can describe what it read either as plain lines
+/// or as markdown — headings, lists, LaTeX formulas and HTML tables. Which one is wanted follows
+/// the extraction's own <see cref="OutputFormat"/> unless a caller says otherwise, so a markdown
+/// extraction of a scanned page comes back as markdown rather than as a flat transcript.
+/// </remarks>
+public enum OcrTextFormat
+{
+    /// <summary>
+    /// Follow the extraction's <see cref="OutputFormat"/>: markdown for the markup formats,
+    /// plain lines for everything else. The default.
+    /// </summary>
+    Auto = 0,
+
+    /// <summary>Plain lines, whatever the extraction is rendering to.</summary>
+    PlainText = 1,
+
+    /// <summary>Markdown, whatever the extraction is rendering to.</summary>
+    Markdown = 2,
+}
+
+/// <summary>
 /// Settings for the optional OCR pass.
 /// </summary>
 /// <remarks>
@@ -73,8 +97,65 @@ public sealed class OcrOptions
     public int MinImagePixels { get; set; } = 64 * 64;
 
     /// <summary>
+    /// Smallest either side of an image may be, in pixels. A separator rule is 900x3 and clears
+    /// <see cref="MinImagePixels"/> on area alone, so the area test is not enough on its own.
+    /// </summary>
+    public int MinImageDimension { get; set; } = 32;
+
+    /// <summary>
+    /// Largest image, in total pixels, worth recognising. A poster-sized scan or a stitched
+    /// panorama is decoded in full before the recognizer downsamples it to its own pixel budget,
+    /// so the ceiling is about what decoding costs rather than about what recognition costs.
+    /// </summary>
+    /// <remarks>
+    /// The default leaves room for an A3 page scanned at 600 dpi (about 49 megapixels) and stops
+    /// short of the sizes that decode into gigabytes.
+    /// </remarks>
+    public long MaxImagePixels { get; set; } = 50_000_000;
+
+    /// <summary>
+    /// Largest encoded image, in bytes, worth recognising.
+    /// </summary>
+    /// <remarks>
+    /// Several extractors record no dimensions for the images they carry, and an image of unknown
+    /// size is recognised rather than skipped — so this is the only ceiling that applies to those,
+    /// which is why it exists alongside <see cref="MaxImagePixels"/>.
+    /// </remarks>
+    public long MaxImageBytes { get; set; } = 32L * 1024 * 1024;
+
+    /// <summary>
     /// A per-image ceiling on recognition time. Exceeding it records a warning and leaves the
     /// remaining images unrecognised rather than letting one pathological input run unbounded.
     /// </summary>
     public TimeSpan PerImageTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// The shape the recognised text takes. Defaults to <see cref="OcrTextFormat.Auto"/>, which
+    /// follows the extraction's own output format.
+    /// </summary>
+    public OcrTextFormat TextFormat { get; set; } = OcrTextFormat.Auto;
+
+    /// <summary>
+    /// A copy of these options with <see cref="TextFormat"/> resolved to a concrete shape.
+    /// </summary>
+    /// <remarks>
+    /// A copy rather than a mutation: the options object belongs to the caller's
+    /// <see cref="ExtractionConfig"/> and may be reused across extractions, so resolving
+    /// <see cref="OcrTextFormat.Auto"/> against one document's output format must not decide the
+    /// next one's.
+    /// </remarks>
+    internal OcrOptions WithTextFormat(OcrTextFormat format) => new()
+    {
+        Mode = Mode,
+        ModelDirectory = ModelDirectory,
+        LayoutModelDirectory = LayoutModelDirectory,
+        Dpi = Dpi,
+        MaxImages = MaxImages,
+        MinImagePixels = MinImagePixels,
+        MinImageDimension = MinImageDimension,
+        MaxImagePixels = MaxImagePixels,
+        MaxImageBytes = MaxImageBytes,
+        PerImageTimeout = PerImageTimeout,
+        TextFormat = format,
+    };
 }

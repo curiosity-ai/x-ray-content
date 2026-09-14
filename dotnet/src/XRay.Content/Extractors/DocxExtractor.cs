@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using XRay.Content.Core;
+using XRay.Content.Core.Ocr;
 using XRay.Content.Internal.Ooxml;
 using XRay.Content.Types;
 
@@ -29,6 +30,10 @@ public sealed class DocxExtractor : IExtractor
         var doc = DocxReader.Parse(pkg);
         var internalDoc = BuildInternalDocument(doc);
         PopulateImages(doc, internalDoc);
+        // Relationship targets are `word/`-relative ("media/image1.png"), which is the shape
+        // `SourcePath` carries; the package wants the part name.
+        OcrImageSource.AttachBytes(internalDoc, config, path =>
+            pkg.ReadBytes(path.StartsWith('/') ? path[1..] : "word/" + path));
         internalDoc.MimeType = mimeType;
         internalDoc.Metadata = BuildMetadata(pkg);
         SetPageStructure(doc, internalDoc.Metadata);
