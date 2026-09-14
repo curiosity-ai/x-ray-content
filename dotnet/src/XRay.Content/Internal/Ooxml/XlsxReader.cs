@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
+using XRay.Content.Internal.Excel;
 
 namespace XRay.Content.Internal.Ooxml;
 
@@ -27,17 +28,26 @@ public sealed class ExcelWorkbook
 /// </summary>
 public static class XlsxReader
 {
-    public static ExcelWorkbook Read(ReadOnlySpan<byte> content, bool officeMetadata)
+    /// <summary>Reads a workbook's sheets and metadata.</summary>
+    /// <param name="content">The OOXML package.</param>
+    /// <param name="officeMetadata">Collect the package's document properties.</param>
+    /// <param name="numberFormats">
+    /// Render numeric cells through <c>styles.xml</c>, so a cell reads the way Excel shows it.
+    /// False keeps the bare value calamine hands the Rust original — see "Deviation: formatted
+    /// Excel cells" in <c>CLAUDE.md</c>.
+    /// </param>
+    public static ExcelWorkbook Read(ReadOnlySpan<byte> content, bool officeMetadata, bool numberFormats = true)
     {
         using var pkg = new OoxmlPackage(content);
         var wb = new ExcelWorkbook();
 
         var sheetNames = ReadSheetOrder(pkg);
         var shared = ReadSharedStrings(pkg);
+        var formats = numberFormats ? ReadCellFormats(pkg) : ExcelCellFormats.Empty;
 
         foreach (var (name, target, _) in sheetNames)
         {
-            var sheet = ProcessSheet(pkg, name, target, shared);
+            var sheet = ProcessSheet(pkg, name, target, shared, formats);
             wb.Sheets.Add(sheet);
             if (CollectSheetFormulas(pkg, target) is { } formulas) wb.Metadata[$"formulas_{name}"] = formulas;
         }
@@ -193,7 +203,7 @@ public static class XlsxReader
         return letters.ToString();
     }
 
-    private static ExcelSheet ProcessSheet(OoxmlPackage pkg, string name, string target, List<string> shared)
+    private static ExcelSheet ProcessSheet(OoxmlPackage pkg, string name, string target, List<string> shared, ExcelCellFormats formats)
     {
         var cellsByPos = new Dictionary<(int Row, int Col), string>();
         int rowMin = int.MaxValue, rowMax = -1, colMin = int.MaxValue, colMax = -1;
@@ -212,7 +222,7 @@ public static class XlsxReader
                 {
                     int colIdx = ParseColIndex(c) ?? autoCol;
                     autoCol = colIdx + 1;
-                    if (TryCellValue(c, shared, out var value))
+                    if (TryCellValue(c, shared, formats, out var value))
                     {
                         cellsByPos[(rowIdx, colIdx)] = value;
                         if (rowIdx < rowMin) rowMin = rowIdx;
@@ -267,7 +277,8 @@ public static class XlsxReader
     }
 
     /// <summary>Format a cell's value like calamine's <c>format_cell_to_string</c>. Returns false for empty cells.</summary>
-    private static bool TryCellValue(XElement c, List<string> shared, out string value)
+    private static bool TryCellValue(
+        XElement c, List<string> shared, ExcelCellFormats formats, out string value)
     {
         value = "";
         string? type = c.Attribute("t")?.Value;
@@ -305,13 +316,64 @@ public static class XlsxReader
                 value = raw;
                 return true;
             default:
-                // Numeric (t absent or "n"): shortest round-trippable, integers without ".0".
+                // Numeric (t absent or "n"): the cell's own format where it has one, and
+                // otherwise shortest round-trippable, integers without ".0".
                 if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
-                    value = d.ToString("R", CultureInfo.InvariantCulture);
+                {
+                    value = formats.Render(CellFormatIndex(c), d) ?? d.ToString("R", CultureInfo.InvariantCulture);
+                }
                 else
+                {
                     value = raw;
+                }
                 return true;
         }
+    }
+
+    /// <summary>The cell's <c>s</c> attribute: its index into <c>cellXfs</c>, defaulting to the
+    /// first entry the way a cell with no style does.</summary>
+    private static int CellFormatIndex(XElement c) =>
+        int.TryParse(c.Attribute("s")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int s)
+            ? s
+            : 0;
+
+    // ── styles.xml: numFmts + cellXfs ─────────────────────────────────────────
+    /// <summary>
+    /// The workbook's number formats and the cell formats that cite them. <c>cellXfs</c> is
+    /// positional — a cell's <c>s</c> attribute indexes it — so the order is the file's.
+    /// </summary>
+    private static ExcelCellFormats ReadCellFormats(OoxmlPackage pkg)
+    {
+        var formats = new ExcelCellFormats();
+        var xml = pkg.ReadXml("xl/styles.xml");
+        if (xml?.Root is null) return formats;
+
+        var numFmts = xml.Root.Elements().FirstOrDefault(e => e.Name.LocalName == "numFmts");
+        if (numFmts is not null)
+        {
+            foreach (var f in numFmts.Elements().Where(e => e.Name.LocalName == "numFmt"))
+            {
+                if (int.TryParse(f.Attribute("numFmtId")?.Value, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out int id)
+                    && f.Attribute("formatCode")?.Value is { } code)
+                    formats.AddCode(id, code);
+            }
+        }
+
+        var cellXfs = xml.Root.Elements().FirstOrDefault(e => e.Name.LocalName == "cellXfs");
+        if (cellXfs is not null)
+        {
+            foreach (var xf in cellXfs.Elements().Where(e => e.Name.LocalName == "xf"))
+            {
+                formats.AddCellFormat(
+                    int.TryParse(xf.Attribute("numFmtId")?.Value, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out int id)
+                        ? id
+                        : 0);
+            }
+        }
+
+        return formats;
     }
 
     // ── markdown table (faithful to generate_markdown_and_cells) ───────────────

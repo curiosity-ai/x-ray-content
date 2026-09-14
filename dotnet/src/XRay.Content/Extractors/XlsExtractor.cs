@@ -30,7 +30,7 @@ public sealed class XlsExtractor : IExtractor
     public InternalDocument Extract(ReadOnlySpan<byte> content, string mimeType, ExtractionConfig config)
     {
         var comp = CompoundFile.Open(content);
-        var sheets = BiffReader.ReadSheets(comp);
+        var sheets = BiffReader.ReadSheets(comp, config.Options.ExcelNumberFormats);
         TableBudget.ChargeSheets(SecurityBudget.FromConfig(config), sheets.Select(sh => sh.Cells));
 
         var doc = BuildInternalDocument(sheets);

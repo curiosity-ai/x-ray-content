@@ -1,9 +1,10 @@
 // Ported from Rust `crates/xberg/src/extractors/image.rs` + `extraction/image.rs`.
 //
-// Metadata/EXIF only — the OCR path is dropped (out of scope for the port). This mirrors
-// the Rust `config.effective_disable_ocr()` branch: build a metadata-only document carrying
-// an Image element plus `ImageMetadata` (width, height, format, exif). Dimensions and format
-// come from SixLabors.ImageSharp; EXIF from the ImageSharp ExifProfile (see ExifReader).
+// Metadata/EXIF only — recognition is not done here (the port runs OCR as a later pass). This
+// mirrors the Rust `config.effective_disable_ocr()` branch: build a metadata-only document
+// carrying an Image element plus `ImageMetadata` (width, height, format, exif), attaching the
+// image's bytes when `config.needs_image_data()`. Dimensions and format come from
+// SixLabors.ImageSharp; EXIF from the ImageSharp ExifProfile (see ExifReader).
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
@@ -52,43 +53,46 @@ public sealed class ImageExtractor : IExtractor
             ? HeifMetadata(bytes)
             : RasterMetadata(bytes);
 
-        // build_image_internal_document(None, None): a single Image element referencing
-        // image index 0 (no bytes stored in doc.images by default).
+        // build_image_internal_document(None, attach_image), where upstream's attach_image is
+        // `Some(extracted_image)` when config.needs_image_data() and None otherwise.
         var builder = new InternalDocumentBuilder("image");
-        var kind = ElementKind.Image(0);
-        builder.PushElement(new InternalElement
+
+        if (config.NeedsImageData())
         {
-            Id = InternalElementId.Generate(kind.Discriminant(), "", null, 0),
-            Kind = kind,
-            Text = "",
-            Depth = 0,
-            Layer = ContentLayer.Body,
-        });
+            bool measured = imageMeta.Width > 0 && imageMeta.Height > 0;
+
+            builder.PushImage(null, new ExtractedImage
+            {
+                Data = bytes,
+                Format = imageMeta.Format,
+                ImageIndex = 0,
+                // Left unset when the dimensions could not be read — a HEIF container's often
+                // cannot — because zero would read as "smaller than the floor" to the OCR pass's
+                // size filter and skip the image, where unknown means "recognise it anyway".
+                Width = measured ? imageMeta.Width : null,
+                Height = measured ? imageMeta.Height : null,
+                IsMask = false,
+                // image_kind::classify is skipped, as in the other extractors: the classifier is
+                // not ported, so ImageKind / KindConfidence stay null.
+            }, null, null);
+        }
+        else
+        {
+            // push_image_placeholder: an Image element referencing index 0 with nothing behind it.
+            var kind = ElementKind.Image(0);
+            builder.PushElement(new InternalElement
+            {
+                Id = InternalElementId.Generate(kind.Discriminant(), "", null, 0),
+                Kind = kind,
+                Text = "",
+                Depth = 0,
+                Layer = ContentLayer.Body,
+            });
+        }
 
         var doc = builder.Build();
         doc.Metadata = new Metadata { Format = FormatMetadata.Image(imageMeta) };
         doc.MimeType = mimeType;
-
-        // The one image this document has is the file itself, and the OCR pass reads bytes off
-        // `doc.Images` — so without this an image file is the one thing `AllImages` could not
-        // read. Attached only when the mode asked for it, so extraction output is unchanged
-        // otherwise (upstream's `build_image_internal_document` stores no bytes).
-        if (XRay.Content.Core.Ocr.OcrImageSource.WantsEmbeddedImages(config))
-        {
-            bool measured = imageMeta.Width > 0 && imageMeta.Height > 0;
-
-            doc.Images.Add(new ExtractedImage
-            {
-                ImageIndex = 0,
-                Data = bytes,
-                Format = imageMeta.Format,
-                // Left unset when the dimensions could not be read — a HEIF container's often
-                // cannot — because zero would read as "smaller than the floor" and skip the
-                // image, where unknown means "recognise it anyway".
-                Width = measured ? imageMeta.Width : null,
-                Height = measured ? imageMeta.Height : null,
-            });
-        }
 
         return doc;
     }

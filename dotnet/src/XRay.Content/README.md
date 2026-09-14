@@ -1,4 +1,4 @@
-<img src="logo.png" alt="X-Ray" width="160" align="right" />
+![X-Ray](https://raw.githubusercontent.com/curiosity-ai/x-ray-content/main/dotnet/src/XRay.Content/logo.png)
 
 # X-Ray.Content
 

@@ -167,29 +167,6 @@ internal static class OcrProcessor
     }
 
     /// <summary>
-    /// Builds the element one recognition becomes.
-    /// </summary>
-    /// <remarks>
-    /// Markdown-shaped text is marked as such on the element, because the markdown renderer has
-    /// to know: text it treats as a paragraph's words gets escaped, which turns a recognised
-    /// heading into <c>\## Heading</c> and a recognised table into its own source. The marker is
-    /// what lets the renderer pass it through instead. Every other renderer ignores it and emits
-    /// the text as it stands.
-    /// </remarks>
-    private static InternalElement OcrElement(string text, OcrElementLevel level, OcrOptions options)
-    {
-        var element = InternalElement.TextElement(ElementKind.OcrText(level), text, 0);
-
-        if (options.TextFormat == OcrTextFormat.Markdown)
-        {
-            element.Attributes ??= new Dictionary<string, string>();
-            element.Attributes[MarkdownAttribute] = "markdown";
-        }
-
-        return element;
-    }
-
-    /// <summary>
     /// Element attribute naming the shape of a recognised text element, read by the markdown
     /// renderer. Shared with <c>ComrakBridge</c>, which is the only reader.
     /// </summary>
@@ -224,9 +201,9 @@ internal static class OcrProcessor
             if (!TryRecognize(doc, engine, png, options, $"page {page}", out var result)) break;
             if (!result.HasText) continue;
 
-            var element = OcrElement(result.Text, OcrElementLevel.Page, options);
-            element.Page = page;
-            doc.Elements.Add(element);
+            var elements = ElementsFor(doc, result.Text, OcrElementLevel.Page, page, options);
+            if (elements.Count == 0) continue;
+            doc.Elements.AddRange(elements);
             recognized++;
         }
         return recognized;
@@ -246,8 +223,9 @@ internal static class OcrProcessor
     {
         // Collected first and inserted afterwards: inserting while scanning would invalidate the
         // indices the scan is still walking.
-        var insertions = new List<(int AfterElement, string Text, uint? Page)>();
-        var appended = new List<string>();
+        var insertions = new List<(int AfterElement, List<InternalElement> Elements)>();
+        var appended = new List<InternalElement>();
+        int appendedImages = 0;
 
         foreach (int imageIndex in targets)
         {
@@ -257,21 +235,80 @@ internal static class OcrProcessor
 
             int host = doc.Elements.FindIndex(e =>
                 e.Kind.Tag == ElementKindTag.Image && e.Kind.ImageIndex == (uint)imageIndex);
-            if (host >= 0) insertions.Add((host, result.Text, doc.Elements[host].Page));
-            else appended.Add(result.Text);
+            var elements = ElementsFor(
+                doc, result.Text, OcrElementLevel.Block, host >= 0 ? doc.Elements[host].Page : null, options);
+            if (elements.Count == 0) continue;
+
+            if (host >= 0)
+            {
+                insertions.Add((host, elements));
+            }
+            else
+            {
+                appended.AddRange(elements);
+                appendedImages++;
+            }
         }
 
         // Back to front, so an earlier insertion cannot shift a later one's position.
-        foreach (var (after, text, page) in insertions.OrderByDescending(i => i.AfterElement))
-        {
-            var element = OcrElement(text, OcrElementLevel.Block, options);
-            element.Page = page;
-            doc.Elements.Insert(after + 1, element);
-        }
-        foreach (string text in appended)
-            doc.Elements.Add(OcrElement(text, OcrElementLevel.Block, options));
+        foreach (var (after, elements) in insertions.OrderByDescending(i => i.AfterElement))
+            doc.Elements.InsertRange(after + 1, elements);
+        doc.Elements.AddRange(appended);
 
-        return insertions.Count + appended.Count;
+        return insertions.Count + appendedImages;
+    }
+
+    /// <summary>
+    /// The elements one recognition contributes.
+    /// </summary>
+    /// <remarks>
+    /// A recognizer reports a table region as HTML markup — see <see cref="OcrTables"/> — and
+    /// markup in a text element is markup in every rendering of the document. Recovering it into
+    /// the document's own table model here, while the element stream is still the only
+    /// representation, is what lets Markdown write a pipe table, HTML write a real
+    /// <c>&lt;table&gt;</c>, and plain text write neither's tags; it also puts the table in
+    /// <c>ExtractedDocument.Tables</c>, where a consumer already looks for one.
+    /// <para>
+    /// What is left over is text, and markdown-shaped text is marked as such, because the markdown
+    /// renderer has to know: text it treats as a paragraph's words gets escaped, which turns a
+    /// recognised heading into <c>\## Heading</c>. Every other renderer ignores the marker and
+    /// emits the text as it stands.
+    /// </para>
+    /// </remarks>
+    private static List<InternalElement> ElementsFor(
+        InternalDocument doc, string text, OcrElementLevel level, uint? page, OcrOptions options)
+    {
+        var elements = new List<InternalElement>();
+
+        foreach (var segment in OcrTables.Split(text))
+        {
+            InternalElement element;
+            if (segment.Cells is { } cells)
+            {
+                uint index = doc.PushTable(new Table
+                {
+                    Cells = cells,
+                    Markdown = InternalDocumentBuilder.CellsToMarkdown(cells),
+                    PageNumber = page ?? 0,
+                });
+                element = InternalElement.TextElement(ElementKind.Table(index), "", 0);
+            }
+            else
+            {
+                element = InternalElement.TextElement(ElementKind.OcrText(level), segment.Text, 0);
+
+                if (options.TextFormat == OcrTextFormat.Markdown)
+                {
+                    element.Attributes ??= new Dictionary<string, string>();
+                    element.Attributes[MarkdownAttribute] = "markdown";
+                }
+            }
+
+            element.Page = page;
+            elements.Add(element);
+        }
+
+        return elements;
     }
 
     /// <summary>
