@@ -91,6 +91,9 @@ internal sealed class GridTable
 internal static partial class PdfSpatialTables
 {
     private const double SnapTol = 3.0;
+
+    /// <summary>How far a whole snapped group may spread, however tightly it chains.</summary>
+    private const double SnapSpreadTol = 2.0 * SnapTol;
     private const double JoinTol = 3.0;
     private const double MinEdgeLen = 5.0;
     private const int DottedMinSegments = 3;
@@ -100,6 +103,31 @@ internal static partial class PdfSpatialTables
 
     /// <summary>Line/rect path count above which a page is a drawing, not a ruled table.</summary>
     private const int MaxTableEdges = 1500;
+
+    /// <summary>
+    /// Candidate gridlines scanned past the nearest one when closing a cell. A merged cell
+    /// covering more than this many of the grid's own lines does not occur in a real table,
+    /// and the bound keeps the search linear on a page whose corners never close.
+    /// </summary>
+    private const int MaxSpannedGridLines = 64;
+
+    /// <summary>
+    /// Fraction of a horizontal stroke that must run over glyphs before it is read as text
+    /// decoration rather than a ruling.
+    /// </summary>
+    private const double DecorationMinTextCoverage = 0.5;
+
+    /// <summary>
+    /// How far inside a word's own box a stroke must sit to be crossing it. A ruling line sits
+    /// on the row boundary, which is the very edge of the adjacent words' boxes (measured on
+    /// tracked-changes documents: the descender edge, 0.96 and up); a strikethrough sits near
+    /// the middle (0.25 - 0.35). The band between those two is wide, so the margin is chosen
+    /// well clear of both ends rather than tuned to either.
+    /// </summary>
+    private const double DecorationBandMargin = 0.15;
+
+    /// <summary>Height of one bucket of the word index the decoration filter probes.</summary>
+    private const double DecorationBucketHeight = 8.0;
 
     /// <summary>Horizontal slack for the fragment consolidation's X-start and width match.</summary>
     /// <remarks>
@@ -267,6 +295,7 @@ internal static partial class PdfSpatialTables
 
         var lines = new List<PdfPath>();
         foreach (var p in paths) if (p.IsTablePrimitive()) lines.Add(p);
+        lines = WithoutTextDecoration(lines, spans);
         if (lines.Count == 0) return result;
 
         var detected = DetectTablesWithLines(spans, lines, config);
@@ -321,6 +350,90 @@ internal static partial class PdfSpatialTables
         public double Coord;
         public double Start;
         public double End;
+    }
+
+    /// <summary>
+    /// Drop the horizontal strokes that are text decoration rather than ruling: a
+    /// strikethrough is a thin line like any other, and one per struck-out cell is enough to
+    /// shred a grid.
+    /// </summary>
+    /// <remarks>
+    /// A tracked-changes document draws a strikethrough over every deleted cell, and those
+    /// strokes reach the same edge list as the table's rules. They cross a column rule often
+    /// enough to raise an intersection, so the grid gains a row boundary at every struck-out
+    /// line; the rows that boundary invents are mostly empty, and the emptiness filters then
+    /// discard the table itself. The discriminator is geometric and needs no heuristic about
+    /// what a table looks like: <em>a ruling line does not pass through glyphs</em>. A stroke
+    /// most of whose length runs over words, at a height inside those words' own boxes rather
+    /// than at their edge, is decoration.
+    /// <para>
+    /// An underline is deliberately left alone: it sits where a rule sits — on the text's
+    /// bottom edge — so the same test cannot separate the two, and dropping a real rule costs
+    /// more than keeping a stray underline.
+    /// </para>
+    /// </remarks>
+    private static List<PdfPath> WithoutTextDecoration(List<PdfPath> lines, List<TableSpan> spans)
+    {
+        if (spans.Count == 0) return lines;
+
+        // Words bucketed by height, so each stroke only measures itself against the words it
+        // could possibly cross rather than against the whole page.
+        var buckets = new Dictionary<int, List<int>>();
+        for (int i = 0; i < spans.Count; i++)
+        {
+            var b = spans[i].Bbox;
+            if (b.Bottom <= b.Top) continue;
+            int lo = (int)Math.Floor(b.Top / DecorationBucketHeight);
+            int hi = (int)Math.Floor(b.Bottom / DecorationBucketHeight);
+            for (int k = lo; k <= hi; k++)
+            {
+                if (!buckets.TryGetValue(k, out var list)) buckets[k] = list = new List<int>();
+                list.Add(i);
+            }
+        }
+
+        var kept = new List<PdfPath>(lines.Count);
+        foreach (var path in lines)
+        {
+            if (IsHorizontalLine(path, LineAxisTol) && IsTextDecoration(path, spans, buckets)) continue;
+            kept.Add(path);
+        }
+        return kept;
+    }
+
+    private static bool IsTextDecoration(
+        PdfPath path, List<TableSpan> spans, Dictionary<int, List<int>> buckets)
+    {
+        var r = path.RenderedBbox();
+        double left = r.Left, right = r.Right, y = r.CenterY;
+        double length = right - left;
+        if (length < MinEdgeLen) return false;
+        if (!buckets.TryGetValue((int)Math.Floor(y / DecorationBucketHeight), out var candidates)) return false;
+
+        // The x-intervals over which the stroke runs across a word at a height inside that
+        // word's box, merged so overlapping words are not counted twice.
+        var covered = new List<(double Start, double End)>();
+        foreach (int i in candidates)
+        {
+            var b = spans[i].Bbox;
+            double height = b.Bottom - b.Top;
+            if (height <= 0) continue;
+            double inset = height * DecorationBandMargin;
+            if (y <= b.Top + inset || y >= b.Bottom - inset) continue;
+            double start = Math.Max(left, b.Left), end = Math.Min(right, b.Right);
+            if (end > start) covered.Add((start, end));
+        }
+        if (covered.Count == 0) return false;
+
+        covered.Sort((a, b) => a.Start.CompareTo(b.Start));
+        double total = 0.0, runStart = covered[0].Start, runEnd = covered[0].End;
+        for (int i = 1; i < covered.Count; i++)
+        {
+            if (covered[i].Start <= runEnd) runEnd = Math.Max(runEnd, covered[i].End);
+            else { total += runEnd - runStart; runStart = covered[i].Start; runEnd = covered[i].End; }
+        }
+        total += runEnd - runStart;
+        return total / length >= DecorationMinTextCoverage;
     }
 
     private static (List<Edge> H, List<Edge> V) ExtractEdges(List<PdfPath> lines)
@@ -394,6 +507,16 @@ internal static partial class PdfSpatialTables
     }
 
     /// <summary>Sort by coord and snap nearby coordinates onto the first of each group.</summary>
+    /// <remarks>
+    /// A group extends while each coordinate is within <see cref="SnapTol"/> of the one before
+    /// it, not only of the group's first, and stops at <see cref="SnapSpreadTol"/> overall.
+    /// Measuring from the first alone splits a cluster that straddles the tolerance: a rule at
+    /// 70.5 and the shading rectangle drawn against it at 70.8 belong together, but with a
+    /// third edge at 67.5 sorting ahead of them the rule joins that one and the shading, 3.3
+    /// away from it, becomes a column boundary of its own — which is a phantom column down the
+    /// whole table. Chaining from the previous coordinate keeps the cluster whole, and the
+    /// spread bound is what stops a page of closely spaced strokes from chaining into one.
+    /// </remarks>
     private static void SnapEdges(List<Edge> edges)
     {
         if (edges.Count == 0) return;
@@ -402,9 +525,13 @@ internal static partial class PdfSpatialTables
         while (i < edges.Count)
         {
             double baseCoord = edges[i].Coord;
+            double previous = baseCoord;
             int j = i + 1;
-            while (j < edges.Count && Math.Abs(edges[j].Coord - baseCoord) <= SnapTol)
+            while (j < edges.Count
+                   && edges[j].Coord - previous <= SnapTol
+                   && edges[j].Coord - baseCoord <= SnapSpreadTol)
             {
+                previous = edges[j].Coord;
                 var e = edges[j];
                 e.Coord = baseCoord;
                 edges[j] = e;
@@ -549,9 +676,17 @@ internal static partial class PdfSpatialTables
     }
 
     /// <summary>
-    /// A cell exists when all four corners are present and nothing intervenes between
-    /// them on either axis.
+    /// A cell is the smallest rectangle of gridlines whose four corners are all present.
     /// </summary>
+    /// <remarks>
+    /// Closing a cell against the <em>nearest</em> line on each axis only finds the cells of a
+    /// fully ruled grid. Where cells are merged it finds nothing at all: a row rule that stops
+    /// at the column it splits leaves the neighbouring tall cell's nearest bottom-right corner
+    /// missing, so the tall cell is never built and every word inside it is dropped on the
+    /// floor. Scanning on to the next candidate line recovers exactly those cells — a rowspan
+    /// or a colspan — and changes nothing where the nearest lines already close, which is the
+    /// ordinary case.
+    /// </remarks>
     private static List<IntersectionCell> BuildCellsFromIntersections(List<Intersection> pts)
     {
         var xs = UniqueSorted(pts.Select(p => p.X));
@@ -567,18 +702,46 @@ internal static partial class PdfSpatialTables
 
         bool Has(int xi, int yi) => present.Contains(yi * nx + xi);
 
+        // The cell closes at the nearest gridline on each axis wherever it can. Where it
+        // cannot, the missing corner means the cell is merged across one axis, and the search
+        // runs on along that axis alone: a rowspan keeps the nearest right edge and looks
+        // further down, a colspan keeps the nearest bottom edge and looks further right.
+        // Neither axis is extended without the other held fixed — a rectangle free to grow on
+        // both would swallow whatever short band sits beside it.
+        (int X, int Y)? ClosingCorner(int xi, int yi)
+        {
+            int right = -1;
+            for (int k = xi + 1; k < nx; k++) if (Has(k, yi)) { right = k; break; }
+            int bottom = -1;
+            for (int m = yi + 1; m < ny; m++) if (Has(xi, m)) { bottom = m; break; }
+            if (right < 0 || bottom < 0) return null;
+            if (Has(right, bottom)) return (right, bottom);
+
+            int steps = 0;
+            for (int m = bottom + 1; m < ny && steps < MaxSpannedGridLines; m++)
+            {
+                if (!Has(xi, m)) continue;
+                steps++;
+                if (Has(right, m)) return (right, m);
+            }
+            steps = 0;
+            for (int k = right + 1; k < nx && steps < MaxSpannedGridLines; k++)
+            {
+                if (!Has(k, yi)) continue;
+                steps++;
+                if (Has(k, bottom)) return (k, bottom);
+            }
+            return null;
+        }
+
         var cells = new List<IntersectionCell>();
         for (int yi = 0; yi < ny; yi++)
         {
             for (int xi = 0; xi < nx; xi++)
             {
                 if (!Has(xi, yi)) continue;
-                int nxi = -1;
-                for (int k = xi + 1; k < nx; k++) if (Has(k, yi)) { nxi = k; break; }
-                int nyi = -1;
-                for (int k = yi + 1; k < ny; k++) if (Has(xi, k)) { nyi = k; break; }
-                if (nxi >= 0 && nyi >= 0 && Has(nxi, nyi))
-                    cells.Add(new IntersectionCell(xs[xi], ys[yi], xs[nxi], ys[nyi]));
+                if (ClosingCorner(xi, yi) is { } corner)
+                    cells.Add(new IntersectionCell(xs[xi], ys[yi], xs[corner.X], ys[corner.Y]));
             }
         }
         return cells;
@@ -719,12 +882,36 @@ internal static partial class PdfSpatialTables
 
         int ColOf(double x) { for (int c = 0; c < numCols; c++) if (Math.Abs(xs[c] - x) <= SnapTol) return c; return -1; }
         int RowOf(double y) { for (int r = 0; r < numRows; r++) if (Math.Abs(ys[r] - y) <= SnapTol) return r; return -1; }
+        int XBound(double x) { for (int c = 0; c < xs.Count; c++) if (Math.Abs(xs[c] - x) <= SnapTol) return c; return -1; }
+        int YBound(double y) { for (int r = 0; r < ys.Count; r++) if (Math.Abs(ys[r] - y) <= SnapTol) return r; return -1; }
 
+        // A merged cell covers several of the grid's row or column intervals, but holds its
+        // text once. `anchor` maps every interval a cell covers back to the cell's first
+        // interval in reading order — its top-left, which in these bottom-origin coordinates
+        // is the *highest* y it touches — so a word sitting in the lower half of a vertically
+        // merged cell is filed under the cell rather than dropped for landing where the grid
+        // has no cell of its own. The origin keeping the text while the intervals it spans
+        // stay empty is the placement rule
+        // <see cref="XRay.Content.Internal.Tables.GridFlatten"/> applies to every other
+        // format's merged cells.
         var gridHasCell = new bool[numRows, numCols];
+        var anchor = new (int Row, int Col)?[numRows, numCols];
         foreach (var c in groupCells)
         {
-            int ci = ColOf(c.X1), ri = RowOf(c.Y1);
-            if (ci >= 0 && ri >= 0) gridHasCell[ri, ci] = true;
+            int ci = ColOf(c.X1), ciEnd = XBound(c.X2);
+            int riLow = RowOf(c.Y1), riEnd = YBound(c.Y2);
+            if (ci < 0 || riLow < 0) continue;
+            // Both far edges are snapped coordinates, so a cell thinner than the snap
+            // tolerance has its two edges on the same boundary. Such a cell still occupies the
+            // one interval it starts in, and clamping is what keeps its anchor inside itself
+            // rather than one row above, where it would shadow the row that really is there.
+            ciEnd = Math.Max(ciEnd, ci + 1);
+            riEnd = Math.Max(riEnd, riLow + 1);
+            int riTop = Math.Clamp(riEnd - 1, riLow, numRows - 1);
+            gridHasCell[riTop, ci] = true;
+            for (int r = riLow; r < riEnd && r < numRows; r++)
+                for (int col = ci; col < ciEnd && col < numCols; col++)
+                    anchor[r, col] ??= (riTop, ci);
         }
 
         var gridSpans = new List<int>[numRows, numCols];
@@ -733,7 +920,9 @@ internal static partial class PdfSpatialTables
         {
             int ci = GridIntervalForPoint(spans[idx].CenterX, xs);
             int ri = GridIntervalForPoint(spans[idx].CenterY, ys);
-            if (ci >= 0 && ri >= 0 && gridHasCell[ri, ci]) gridSpans[ri, ci].Add(idx);
+            if (ci < 0 || ri < 0) continue;
+            if (anchor[ri, ci] is not { } at) continue;
+            gridSpans[at.Row, at.Col].Add(idx);
         }
 
         // Higher y is higher on the page, so rows read top-to-bottom means descending y.
@@ -837,28 +1026,33 @@ internal static partial class PdfSpatialTables
         List<GridRow> rows, List<List<List<int>>> rowCellSpanIndices,
         List<TableSpan> spans, TableDetectionConfig config)
     {
+        var clustersPerRow = new List<double>?[rows.Count];
+        int multiBaseline = 0, stacked = 0;
+        for (int rowIdx = 0; rowIdx < rows.Count; rowIdx++)
+        {
+            var clusters = BaselineClusters(rowCellSpanIndices[rowIdx], spans, config);
+            if (clusters is null) continue;
+            multiBaseline++;
+            if (!ClustersLookLikeSeparateRows(rowCellSpanIndices[rowIdx], clusters, spans)) continue;
+            stacked++;
+            clustersPerRow[rowIdx] = clusters;
+        }
+
+        // Splitting is for the table that is under-ruled — one whose bands hold stacked
+        // records because the rules between them were never drawn. A table whose bands mostly
+        // hold wrapped text is not that table, and the odd band of its own that happens to
+        // look stacked (a header wrapping to two lines in every column at once is the common
+        // one) is far more likely to be wrapped too. So the decision is the table's, not the
+        // band's: a minority of stacked-looking bands leaves every band alone.
+        if (stacked * 2 < multiBaseline) return new List<GridRow>(rows);
+
         var result = new List<GridRow>();
         for (int rowIdx = 0; rowIdx < rows.Count; rowIdx++)
         {
             var row = rows[rowIdx];
             var cellIndices = rowCellSpanIndices[rowIdx];
 
-            var allYs = new List<double>();
-            foreach (var colSpans in cellIndices)
-                foreach (int idx in colSpans)
-                    if (idx >= 0 && idx < spans.Count) allYs.Add(spans[idx].CenterY);
-
-            if (allYs.Count <= 1) { result.Add(row); continue; }
-
-            allYs.Sort();
-            var yClusters = new List<double>();
-            foreach (double y in allYs)
-            {
-                if (yClusters.Count > 0 && Math.Abs(y - yClusters[^1]) < config.RowTolerance)
-                    yClusters[^1] = (yClusters[^1] + y) / 2.0;
-                else yClusters.Add(y);
-            }
-            if (yClusters.Count <= 1) { result.Add(row); continue; }
+            if (clustersPerRow[rowIdx] is not { } yClusters) { result.Add(row); continue; }
 
             // Descending: higher y is the top of the page, and reads first.
             yClusters.Sort((a, b) => b.CompareTo(a));
@@ -910,6 +1104,102 @@ internal static partial class PdfSpatialTables
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// The distinct text baselines inside one rule-bounded band, or null when it holds at most
+    /// one and so cannot be several rows.
+    /// </summary>
+    private static List<double>? BaselineClusters(
+        List<List<int>> cellIndices, List<TableSpan> spans, TableDetectionConfig config)
+    {
+        var allYs = new List<double>();
+        foreach (var colSpans in cellIndices)
+            foreach (int idx in colSpans)
+                if (idx >= 0 && idx < spans.Count) allYs.Add(spans[idx].CenterY);
+        if (allYs.Count <= 1) return null;
+
+        allYs.Sort();
+        var yClusters = new List<double>();
+        foreach (double y in allYs)
+        {
+            if (yClusters.Count > 0 && Math.Abs(y - yClusters[^1]) < config.RowTolerance)
+                yClusters[^1] = (yClusters[^1] + y) / 2.0;
+            else yClusters.Add(y);
+        }
+        return yClusters.Count > 1 ? yClusters : null;
+    }
+
+    /// <summary>
+    /// Whether a rule-bounded row's text baselines are several records stacked in one cell
+    /// band, rather than one record whose longest cell wrapped.
+    /// </summary>
+    /// <remarks>
+    /// Both shapes put text at more than one height inside the same band, so the baseline count
+    /// alone cannot tell them apart — and splitting a wrapped row is destructive: each wrapped
+    /// line becomes a row of its own with every other column empty, which the emptiness filters
+    /// downstream then read as prose and reject, taking the whole table with it.
+    /// <para>
+    /// What separates them is which baselines run across the band. Stacked records line up:
+    /// each is a baseline carrying text in several columns at once, because that is what makes
+    /// it a row, so <b>two or more baselines must span at least two columns</b>. A wrapped cell
+    /// has only one — its extra lines belong to one column, and the neighbouring columns sit at
+    /// their own heights, centred against it.
+    /// </para>
+    /// <para>
+    /// A baseline carrying one column is not disqualifying on its own: a label merged across
+    /// the rows beside it sits centred between them, on a height of its own, and that is the
+    /// ordinary look of a row group. It only disqualifies when its column also carries text on
+    /// one of the spanning baselines — then the extra line is that column's own continuation,
+    /// which is wrapping.
+    /// </para>
+    /// </remarks>
+    private static bool ClustersLookLikeSeparateRows(
+        List<List<int>> cellIndices, List<double> yClusters, List<TableSpan> spans)
+    {
+        int columns = cellIndices.Count;
+        var occupied = new bool[yClusters.Count, columns];
+        for (int ci = 0; ci < columns; ci++)
+            foreach (int idx in cellIndices[ci])
+            {
+                if (idx < 0 || idx >= spans.Count) continue;
+                int nearest = NearestClusterIndex(spans[idx].CenterY, yClusters);
+                if (nearest >= 0) occupied[nearest, ci] = true;
+            }
+
+        var spansTwoColumns = new bool[yClusters.Count];
+        int spanning = 0;
+        for (int k = 0; k < yClusters.Count; k++)
+        {
+            int count = 0;
+            for (int ci = 0; ci < columns; ci++) if (occupied[k, ci]) count++;
+            if (count >= 2) { spansTwoColumns[k] = true; spanning++; }
+        }
+        if (spanning < 2) return false;
+
+        for (int k = 0; k < yClusters.Count; k++)
+        {
+            if (spansTwoColumns[k]) continue;
+            for (int ci = 0; ci < columns; ci++)
+            {
+                if (!occupied[k, ci]) continue;
+                for (int other = 0; other < yClusters.Count; other++)
+                    if (spansTwoColumns[other] && occupied[other, ci]) return false;
+            }
+        }
+        return true;
+    }
+
+    private static int NearestClusterIndex(double y, List<double> yClusters)
+    {
+        int nearest = -1;
+        double best = double.PositiveInfinity;
+        for (int k = 0; k < yClusters.Count; k++)
+        {
+            double d = Math.Abs(y - yClusters[k]);
+            if (d < best) { best = d; nearest = k; }
+        }
+        return nearest;
     }
 
     /// <summary>

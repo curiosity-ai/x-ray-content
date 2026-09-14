@@ -57,18 +57,41 @@ public sealed class PdfExtractor : IExtractor
         // Advisory: a document we cannot grade reports no scan evidence.
         var scanDetection = PdfScanDetect.Detect(pdf);
 
-        // --- Tables: native → bordered → heuristic, each tier only on pages the
-        // previous one left empty (crates/xberg/src/extractors/pdf/extraction.rs).
+        // --- Tables: native → bordered → heuristic, each later tier folded into what the
+        // earlier ones found (crates/xberg/src/extractors/pdf/extraction.rs).
         // Extracted regardless of output format — tables live in the result
         // independent of `content`.
+        //
+        // The tiers hand off by region and by content, not by page. Upstream skips the whole
+        // page an earlier tier found anything on, which is right while a page holds one table
+        // and wrong in two ways the moment it does not. A page carrying a three-column grid and
+        // a two-column one — the shape every sectioned document lands in, where one section's
+        // table ends and the next one's begins further down — loses the two-column table
+        // entirely, because only the relaxed tier accepts two columns and it never runs there.
+        // And a table ruled down only some of its columns is claimed by a ruled tier as the
+        // narrow grid it can see, which then suppresses for the whole page the tier that could
+        // have read the rest of it. Folding by region keeps the hand-off; keeping whichever
+        // candidate carries more content over a shared region is what stops a partial reading
+        // from shadowing a fuller one. Both are what upstream's own `prepare_emitted_tables`
+        // does to the combined list, one pass later.
         var tables = new List<XRay.Content.Types.Table>();
         try { tables.AddRange(ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Strict(), null)); }
         catch { }
-        var nativePages = new HashSet<uint>(tables.Select(t => t.PageNumber));
-        try { tables.AddRange(ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Bordered(), nativePages)); }
+        try { FoldTier(tables, ExtractRuledTables(pageWords, pagePaths, TableDetectionConfig.Bordered(), null)); }
         catch { }
-        var coveredPages = new HashSet<uint>(tables.Select(t => t.PageNumber));
-        try { tables.AddRange(PdfTableReconstruct.ExtractHeuristicTables(pageSegments, allowSingleColumn: false, coveredPages, pagePaths)); }
+        // The heuristic tier keeps upstream's page-level skip for *new* tables — it is the
+        // loosest of the three, and letting it loose on a page the ruled tiers have already
+        // read turns running prose into tables. What it may still do on such a page is replace
+        // a ruled table that is only a part of what is there.
+        var ruledPages = new HashSet<uint>(tables.Select(t => t.PageNumber));
+        try
+        {
+            FoldTier(
+                tables,
+                PdfTableReconstruct.ExtractHeuristicTables(
+                    pageSegments, allowSingleColumn: false, skipPages: null, pagePaths),
+                supersedeOnlyOn: ruledPages);
+        }
         catch { }
         foreach (var table in tables) PdfTableNormalize.RepairConsistentlyMergedNumericColumn(table);
 
@@ -212,10 +235,93 @@ public sealed class PdfExtractor : IExtractor
         return doc;
     }
 
+    /// <summary>
+    /// Fraction of the smaller box two tables must share before they are taken to be the same
+    /// region seen by two tiers.
+    /// </summary>
+    private const double TableRegionOverlapRatio = 0.5;
+
+    /// <summary>
+    /// Largest share of a candidate's area an earlier table may already cover and still count
+    /// as a partial reading of it rather than a competing one.
+    /// </summary>
+    private const double TablePartialReadingRatio = 0.6;
+
+    /// <summary>
+    /// Fold a later tier's tables into what the earlier tiers found. A candidate over fresh
+    /// ground is kept. A candidate over ground already claimed is dropped — the earlier tier is
+    /// the more trustworthy — unless what is there is only a *part* of it: a table ruled down
+    /// two of its eight columns is claimed by a ruled tier as that narrow grid, and the tier
+    /// that can read all eight should not lose to it. Reaching over much more of the page and
+    /// reading more of it is what separates that from an ordinary disagreement, where the
+    /// earlier tier keeps the region.
+    /// </summary>
+    private static void FoldTier(
+        List<XRay.Content.Types.Table> kept, List<XRay.Content.Types.Table> candidates,
+        HashSet<uint>? supersedeOnlyOn = null)
+    {
+        foreach (var candidate in candidates)
+        {
+            var overlapping = new List<int>();
+            for (int i = 0; i < kept.Count; i++)
+                if (SameRegion(kept[i], candidate)) overlapping.Add(i);
+
+            if (overlapping.Count == 0)
+            {
+                if (supersedeOnlyOn is null || !supersedeOnlyOn.Contains(candidate.PageNumber))
+                    kept.Add(candidate);
+                continue;
+            }
+
+            double area = BoxArea(candidate);
+            int content = ContentCells(candidate);
+            bool supersedes = area > 0;
+            foreach (int i in overlapping)
+                if (ContentCells(kept[i]) >= content
+                    || BoxArea(kept[i]) >= area * TablePartialReadingRatio)
+                {
+                    supersedes = false;
+                    break;
+                }
+            if (!supersedes) continue;
+
+            for (int i = overlapping.Count - 1; i >= 0; i--) kept.RemoveAt(overlapping[i]);
+            kept.Add(candidate);
+        }
+    }
+
+    private static double BoxArea(XRay.Content.Types.Table table) =>
+        table.BoundingBox is { } b ? Math.Max((b.X1 - b.X0) * (b.Y1 - b.Y0), 0.0) : 0.0;
+
+    /// <summary>Whether two tables are two readings of one region of one page.</summary>
+    private static bool SameRegion(XRay.Content.Types.Table a, XRay.Content.Types.Table b)
+    {
+        if (a.PageNumber != b.PageNumber) return false;
+        if (a.BoundingBox is not { } x || b.BoundingBox is not { } y) return false;
+        double w = Math.Min(x.X1, y.X1) - Math.Max(x.X0, y.X0);
+        double h = Math.Min(x.Y1, y.Y1) - Math.Max(x.Y0, y.Y0);
+        if (w <= 0 || h <= 0) return false;
+        double smaller = Math.Min(
+            Math.Max((x.X1 - x.X0) * (x.Y1 - x.Y0), 0.0),
+            Math.Max((y.X1 - y.X0) * (y.Y1 - y.Y0), 0.0));
+        return smaller <= 0 || w * h / smaller >= TableRegionOverlapRatio;
+    }
+
+    /// <summary>How much of a region a table actually read: its non-empty cells.</summary>
+    private static int ContentCells(XRay.Content.Types.Table table)
+    {
+        int count = 0;
+        foreach (var row in table.Cells)
+            foreach (string cell in row)
+                if (cell.Trim().Length > 0) count++;
+        return count;
+    }
+
     // Single per-page pass: parse each page's content stream once, then derive both the
     // assembled page text (returned, joined by blank lines) and the font-metric
     /// <summary>
-    /// Run one ruling-line tier over every page the previous tier left uncovered.
+    /// Run one ruling-line tier over every page, or over every page
+    /// <paramref name="skipPages"/> does not name.
     /// </summary>
     private static List<XRay.Content.Types.Table> ExtractRuledTables(
         List<List<TableSpan>> pageWords, List<List<PdfPath>> pagePaths,
@@ -374,7 +480,7 @@ public sealed class PdfExtractor : IExtractor
 
     // SegmentData grid (out param) used for tables and heading structure. Mirrors Rust
     // `oxide::text::extract_text` + `oxide::hierarchy::extract_all_segments` sharing spans.
-    private static string ExtractTextAndSegments(
+    internal static string ExtractTextAndSegments(
         PdfDocument pdf, long deadline, XRayOptions options,
         out List<List<SegmentData>> pageSegments,
         out List<List<TableSpan>> pageWords, out List<List<PdfPath>> pagePaths)

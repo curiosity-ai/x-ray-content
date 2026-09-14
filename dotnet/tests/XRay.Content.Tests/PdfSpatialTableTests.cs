@@ -204,6 +204,142 @@ public class PdfSpatialTableTests
         Assert.Equal(1u, table.PageNumber);
     }
 
+    /// <summary>
+    /// A filled rectangle, as a shading or highlight is drawn — no stroke, so
+    /// <see cref="PdfPath.RenderedBbox"/> is its geometry.
+    /// </summary>
+    private static PdfPath Fill(double x, double y, double w, double h)
+    {
+        var ops = new List<PathOp> { PathOp.Rect(x, y, w, h) };
+        return new PdfPath { Operations = ops, Bbox = PdfPath.ComputeBbox(ops), Filled = true };
+    }
+
+    /// <summary>The 4x5 grid the tests below vary, drawn with every rule present.</summary>
+    private static List<PdfPath> GridPaths() => new()
+    {
+        Line(20, 44, 500, 44), Line(20, 76, 500, 76), Line(20, 108, 500, 108),
+        Line(20, 140, 500, 140), Line(20, 172, 500, 172), Line(20, 204, 500, 204),
+        Line(20, 44, 20, 204), Line(180, 44, 180, 204),
+        Line(340, 44, 340, 204), Line(500, 44, 500, 204),
+    };
+
+    /// <summary>
+    /// A tracked-changes document strikes a deleted cell through, and that stroke reaches the
+    /// detector as a line like any other. Where it runs over a column rule it raises an
+    /// intersection, inventing a row boundary mid-row; the near-empty rows that boundary
+    /// produces are what the emptiness filters then reject the whole table for.
+    /// </summary>
+    [Fact]
+    public void AStrikethroughAcrossACellIsNotReadAsARowRule()
+    {
+        var paths = GridPaths();
+        // One strikethrough per struck row, each drawn over its cell's text and so reaching
+        // from just inside one column rule to just past the next — which is what lets it raise
+        // an intersection on both.
+        paths.Add(Line(182, 57, 343, 57));
+        paths.Add(Line(182, 89, 343, 89));
+        paths.Add(Line(182, 121, 343, 121));
+
+        var spans = new List<TableSpan>
+        {
+            Word("Region", 30, 180), Word("Q1", 190, 180), Word("Q2", 350, 180),
+            Word("North", 30, 148), Word("1,204", 190, 148), Word("1,388", 350, 148),
+            Word("South", 30, 116, 145), Word("Struck out row", 190, 116, 145),
+            Word("1,011", 350, 116),
+            Word("East", 30, 84, 145), Word("Struck out row", 190, 84, 145),
+            Word("1,702", 350, 84),
+            Word("West", 30, 52, 145), Word("Struck out row", 190, 52, 145),
+            Word("877", 350, 52),
+        };
+
+        var table = Assert.Single(PdfSpatialTables.DetectPageTables(spans, paths, 1, TableDetectionConfig.Strict()));
+        Assert.Equal(5, table.Cells.Count);
+        Assert.Equal(new List<string> { "East", "Struck out row", "1,702" }, table.Cells[3]);
+    }
+
+    /// <summary>
+    /// A cell whose text wraps puts that text on several baselines inside one rule-bounded
+    /// band. Splitting the band there strands each wrapped line in a row of its own with every
+    /// other column empty — which is both wrong and, downstream, fatal to the table.
+    /// </summary>
+    [Fact]
+    public void AWrappedCellStaysOneRow()
+    {
+        var spans = new List<TableSpan>
+        {
+            Word("Region", 30, 180), Word("Q1", 190, 180), Word("Q2", 350, 180),
+            Word("North", 30, 148), Word("1,204", 190, 148), Word("1,388", 350, 148),
+            // One cell wrapped onto three lines; its neighbours sit centred against it.
+            Word("wrapped", 190, 128), Word("over", 190, 116), Word("three", 190, 104),
+            Word("South", 30, 116), Word("1,011", 350, 116),
+            Word("East", 30, 84), Word("1,655", 190, 84), Word("1,702", 350, 84),
+            Word("West", 30, 52), Word("803", 190, 52), Word("877", 350, 52),
+        };
+
+        var table = Assert.Single(PdfSpatialTables.DetectPageTables(spans, GridPaths(), 1, TableDetectionConfig.Strict()));
+        Assert.Equal(5, table.Cells.Count);
+        Assert.Equal(new List<string> { "South", "wrapped over three", "1,011" }, table.Cells[2]);
+    }
+
+    /// <summary>
+    /// Two rows sharing one tall cell: the row rule between them stops at the column it
+    /// splits, so the tall cell's nearest bottom-right corner is missing and it has to be
+    /// closed against the next gridline along. Its text belongs to the first of the two rows,
+    /// the way <see cref="XRay.Content.Internal.Tables.GridFlatten"/> places every other
+    /// format's merged cells.
+    /// </summary>
+    [Fact]
+    public void AVerticallyMergedCellKeepsItsTextOnTheFirstRowItSpans()
+    {
+        var paths = GridPaths();
+        // Splits only the leftmost column of the 76..108 band.
+        paths.Add(Line(20, 92, 180, 92));
+
+        var spans = new List<TableSpan>
+        {
+            Word("Region", 30, 180), Word("Q1", 190, 180), Word("Q2", 350, 180),
+            Word("North", 30, 148), Word("1,204", 190, 148), Word("1,388", 350, 148),
+            Word("South", 30, 116), Word("942", 190, 116), Word("1,011", 350, 116),
+            Word("East", 30, 96), Word("West", 30, 80),
+            // Centred across both, so it lands in the lower interval on its own centre.
+            Word("1,655", 190, 84), Word("1,702", 350, 84),
+            Word("Total", 30, 52), Word("803", 190, 52), Word("877", 350, 52),
+        };
+
+        var table = Assert.Single(PdfSpatialTables.DetectPageTables(spans, paths, 1, TableDetectionConfig.Strict()));
+        Assert.Equal(new List<string> { "East", "1,655", "1,702" }, table.Cells[3]);
+        Assert.Equal(new List<string> { "West", "", "" }, table.Cells[4]);
+    }
+
+    /// <summary>
+    /// A shading rectangle is drawn against the rule it sits behind, a fraction of a point
+    /// away. Snapping each coordinate to the first of its group rather than chaining from the
+    /// one before splits that pair whenever a third edge sorts ahead of them within tolerance
+    /// — and the half-point offcut becomes a column of its own down the whole table.
+    /// </summary>
+    [Fact]
+    public void AShadingDrawnAgainstARuleDoesNotBecomeItsOwnColumn()
+    {
+        var paths = GridPaths();
+        paths.Add(Fill(20.8, 172, 479.4, 31.8));
+        // An unrelated rule above the table, close enough to the table's left edge to anchor
+        // the snapped group there.
+        paths.Add(Line(17.5, 220, 17.5, 260));
+
+        var spans = new List<TableSpan>
+        {
+            Word("Region", 30, 180), Word("Q1", 190, 180), Word("Q2", 350, 180),
+            Word("North", 30, 148), Word("1,204", 190, 148), Word("1,388", 350, 148),
+            Word("South", 30, 116), Word("942", 190, 116), Word("1,011", 350, 116),
+            Word("East", 30, 84), Word("1,655", 190, 84), Word("1,702", 350, 84),
+            Word("West", 30, 52), Word("803", 190, 52), Word("877", 350, 52),
+        };
+
+        var table = Assert.Single(PdfSpatialTables.DetectPageTables(spans, paths, 1, TableDetectionConfig.Strict()));
+        Assert.All(table.Cells, row => Assert.Equal(3, row.Count));
+        Assert.Equal(new List<string> { "Region", "Q1", "Q2" }, table.Cells[0]);
+    }
+
     [Fact]
     public void APageWithNoRulingLinesYieldsNoRuledTable()
     {
