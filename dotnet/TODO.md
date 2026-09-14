@@ -2160,6 +2160,169 @@ and each probe lives in `dotnet/tools/` alongside the reference generator.
       "Unsupported format" and the comparison above is against libheif directly, through
       `pillow-heif`.
 
+## PDF ruled tables — six defects found on a shaded, struck-through, merged-cell document (2026-09-14)
+
+A ten-page landscape document carrying four ruled tables — orange bold header rows, grey shaded
+rows, tracked-changes strikethroughs, vertically merged cells and wrapped text in every
+description column — extracted with **three of its four tables missing entirely** and the fourth
+shredded into nine fragments whose header row landed in the middle of one of them. The gold
+standard was read off page renderings by eye first, then each defect traced to the line that
+caused it.
+
+Every fix has a unit test in `PdfSpatialTableTests`, and each was mutation-proved: the fix was
+reverted in turn and the test watched to fail.
+
+- [x] **A strikethrough is not a ruling line.** `WithoutTextDecoration` / `IsTextDecoration`.
+      A tracked-changes document strikes each deleted cell through, and those strokes reached the
+      edge list as lines like any other. Where one overran a column rule — which it does whenever
+      the struck text fills its cell, since the stroke then starts within `SnapTol` of the rule —
+      it raised an intersection, and the grid gained a row boundary at every struck line. The
+      rows those boundaries invent are mostly empty, and the emptiness filters then reject the
+      table. On the reporting document this alone accounted for six of the nine fragments.
+      The discriminator is geometric and needs no idea of what a table looks like: *a ruling line
+      does not pass through glyphs*. A stroke at least half of whose length runs over words, at a
+      height inside those words' own boxes rather than at their edge, is decoration. Measured on
+      that document's page 6: strikethroughs cover 0.90-1.00 of their length at relative heights
+      0.25-0.35; real row rules cover at most 0.45, at 0.96 and up. An **underline is deliberately
+      left alone** — it sits where a rule sits, so the same test cannot separate the two, and
+      dropping a real rule costs more than keeping a stray underline.
+- [x] **A wrapped cell is one row, not several.** `BaselineClusters`,
+      `ClustersLookLikeSeparateRows`, and a table-level gate in `SplitRowsByTextPositions`.
+      That pass existed for the under-ruled grid, whose bands hold stacked records because the
+      rules between them were never drawn, and it split **every** band holding text on more than
+      one baseline. A description column that wraps to three lines is exactly that shape, so each
+      wrapped line became a row of its own with every other column empty — which `IsValidTable`'s
+      60% emptiness bound then read as prose and threw the whole table away. Two guards, because
+      one is not enough:
+      - **Two or more of a band's baselines must span at least two columns.** That is what makes
+        a baseline a row. A wrapped cell has only one such baseline: its extra lines belong to
+        one column, and the neighbouring columns sit at their own heights, centred against it. A
+        baseline carrying a single column does not disqualify the band on its own — a label
+        merged across the rows beside it sits centred between them, on a height of its own, which
+        is the ordinary look of a row group (`vendored/docling/.../2305.03393v1-pg9.pdf`
+        Table 1, `pdf/tatr.pdf` Table 4). It disqualifies only when its column *also* carries
+        text on one of the spanning baselines — then the extra line is that column's own
+        continuation, which is wrapping.
+      - **Splitting is the table's decision, not the band's.** A minority of stacked-looking
+        bands leaves every band alone. This is what a header wrapping to two lines in every
+        column at once needs: on its own geometry it is indistinguishable from two rows, and it
+        is one band in a table of wrapped ones.
+- [x] **A merged cell keeps its text.** `ClosingCorner` in `BuildCellsFromIntersections`, and the
+      `anchor` map in `AssignSpansToIntersectionGrid`. A cell was closed only against the
+      *nearest* gridline on each axis, which finds nothing at all where cells are merged: a row
+      rule that stops at the column it splits leaves the neighbouring tall cell's nearest
+      bottom-right corner missing, so that cell was never built and every word inside it was
+      dropped on the floor — eleven description cells on one page of the reporting document,
+      silently. The search now runs on along **one** axis at a time (a rowspan keeps the nearest
+      right edge and looks further down, a colspan keeps the nearest bottom edge and looks
+      further right); never both, or a rectangle free to grow on two axes swallows the short band
+      beside it. Spans landing in an interval a merged cell covers are filed under the cell's
+      first interval in reading order, which is the placement rule `GridFlatten` already applies
+      to every other format's merged cells — the origin holds the text, the intervals it spans
+      stay empty. Both far edges are snapped coordinates, so a cell thinner than the snap
+      tolerance has its two edges on the same boundary; the anchor is clamped inside the cell or
+      it lands one row above and shadows the row that really is there.
+- [x] **Snapping chains from the previous coordinate, not the group's first.** `SnapEdges`.
+      A shading rectangle is drawn against the rule it sits behind, a fraction of a point away
+      (0.3 pt apart, on the document that reported this). Measuring every coordinate from the group's
+      *first* splits that pair whenever a third edge sorts ahead of them within tolerance: the
+      rule joined an unrelated table's edge at 67.5, and the shading — 3.3 away from that anchor —
+      became a column boundary of its own, a phantom first column down the whole table, with the
+      header in column 2 and every data row in columns 1 and 3. A group now extends while each
+      coordinate is within `SnapTol` of the one *before* it, bounded by `SnapSpreadTol`
+      (2 x `SnapTol`) overall so a page of closely spaced strokes cannot chain into one.
+- [x] **The ruled tiers hand off by region, not by page.** `FoldTier` in `PdfExtractor`.
+      Upstream skips the whole page the strict tier found anything on. That is right while a page
+      holds one table and wrong the moment it holds two: a page carrying a three-column grid and
+      a two-column one — the shape every sectioned document lands in, where one section's table
+      ends and the next one's begins further down the same page — loses the two-column table
+      entirely, because only the relaxed tier accepts two columns and it never runs there. Two
+      tables on the reporting document were lost this way.
+- [x] **A partial reading does not shadow a fuller one.** Also `FoldTier`. A table ruled down
+      only some of its columns is claimed by a ruled tier as the narrow grid it can see, and
+      under the page-level skip that suppressed, for the whole page, the tier that could have
+      read the rest. On `pdf/tatr.pdf` p8 the ruled tiers saw a 123x67 pt, four-cell grid and the
+      heuristic tier — which reads the full 8x13 table — never ran. A later tier's candidate may
+      now replace what it overlaps when it reaches over much more of the page *and* reads more of
+      it; on an ordinary disagreement the earlier, more trustworthy tier keeps the region. The
+      heuristic tier keeps upstream's page-level skip for **new** tables, though: it is the
+      loosest of the three, and letting it loose on a page the ruled tiers have already read
+      turns running prose into tables (measured: two prose blocks on `pdf/nougat_034.pdf` p15/p21
+      and a title block on `vendored/pdfplumber/.../WARN-Report-….pdf` p1).
+
+### Corpus effect, and every fixture that moved checked against the page itself
+
+Measured over 398 PDF fixtures against goldens regenerated from the current `.reference` tree:
+
+    before  pdf  398  299  331/397 187/397 185/397 325/397 376/397 336/397
+    after   pdf  398  287  331/397 184/397 182/397 320/397 376/397 325/397
+                  (n,  ok,   plain,      md,    html,    json,    meta,  tables)
+
+Plain text does not move at all, and no fixture is a catastrophe either way. The `tables` column
+loses 16 fixtures and gains 5. **Each of the 16 was audited by rendering the page and reading it,
+not by trusting the golden** — and on the evidence the golden is the worse answer far more often
+than the port is:
+
+**The port is now substantially better than the golden** (counted as regressions by the harness,
+which only compares for equality):
+
+- **`pdf/a_comparison_of_programming_languages_…_2014.pdf` p16.** The page is one fully ruled
+  7x18 table (Table 1, Average and Relative Run Time). Upstream emits its **last two rows**; the
+  port emits all 18 with 139 filled cells.
+- **`pdf/nougat_034.pdf` / `pdf/pdfa_009.pdf` p15.** A 3-column director-compensation table with a
+  five-line wrapped header. Upstream emits the five data rows as five columns, two of them empty,
+  with no header at all; the port emits three columns, the header, and the same five rows.
+- **`vendored/docling/pdf/2305.03393v1-pg9.pdf` p1.** Table 1, 8 columns, merged `# enc-layers` /
+  `# dec-layers` labels down the left. Upstream emits three disjoint 6-column fragments with the
+  label columns empty; the port emits one 8-column table of 14 rows.
+
+**Neither answer is the table on the page** — the golden is not a standard worth keeping, and the
+difference is between two wrong renderings:
+
+- **`pdf/2026-13845.pdf` p5** (Federal Register, Table 4). Rendered and read: a 10x6 table whose
+  two-tier header has group titles spanning three columns each, whose underlines are *staggered*
+  in y because one title wraps and the others do not, and whose label column has no left rule at
+  all and so is outside the ruled grid. Both implementations produce 8 columns without the label
+  column, without the last column and without the Totals row. Upstream additionally emits
+  `|  |  |  |  | 2029 | 2031 | 2026 | 2029 |` — the second header line scattered into the wrong
+  columns — where the port emits `| 2026 | 2029 | 2031 |  |  |  |  |  |`. The document's own text
+  keeps every one of those labels: `content.plain` is unchanged.
+- **`pdf/a_comprehensive_study_of_convergent_…_data_types.pdf` p20** and
+  **`pdf/a_comprehensive_study_of_main_memory_partitioning_….pdf` p10/p11.** Rendered and read:
+  p20 is a boxed algorithm specification and two sequence diagrams; p10 and p11 are nothing but
+  line and bar charts. **Neither page holds a table.** Both implementations build one out of
+  diagram labels and chart axis ticks — the golden's `| LSB MSB CMP | | LSB MSB CMP |` is a chart
+  legend over its tick labels. The port's hallucination is shaped differently; that is the whole
+  difference.
+
+**The port adds a low-quality table upstream does not** — a real if small precision cost, all on
+pages where both implementations already fail:
+
+- **`vendored/pdfplumber/.../issue-140-example.pdf` p1.** The page is four grey-headed tables and
+  nothing else. Upstream extracts **zero**; the port extracts one two-row mash of their headers.
+  Both miss the four real tables.
+- **`vendored/pdfplumber/.../issue-1279-example.pdf` p1** (engraved music: `| œ œ | .œ | œ œ |`),
+  **`vendored/pdfium-render/export-test.pdf` p4/p5** (Latin body text), **`pdf/nougat_040.pdf` /
+  `pdf/pdfa_015.pdf` p3** (a geometry proof), **`vendored/markitdown/…/REPAIR-2022-INV-001_multipage.pdf`
+  p1/p2** (an invoice form's label/value block). Each is one extra table of noise.
+
+And five fixtures the change **fixes outright**: `pdf/nougat_046.pdf` / `pdf/pdfa_021.pdf`,
+`user_reports/mp_axmp_rec_en.pdf`, and `vendored/pdfplumber/{pdf,pdfs}/table-curves-example.pdf`.
+
+### Still open on the reporting document
+
+- **Cross-page continuation.** Its four logical tables are still emitted as twelve per-page
+  fragments. Upstream's `stitch_fragmented_tables` groups by page and is only reachable from the
+  structure pipeline, so nothing joins a fragment at the bottom of one page to its continuation
+  at the top of the next.
+- **A header row stranded alone at a page break.** One of its tables begins with its header row
+  by itself at the foot of a page and its data rows on the next. That row is a well-formed 1x2
+  ruled grid, but two filled cells is below `MinTableCells` and one row is below `IsRealGrid`'s
+  floor, so it is not emitted at all and its words reach the output as a paragraph — with the two
+  columns' wrapped lines interleaved by reading order, which is how a two-column band reads when
+  nothing tells the text path it is a table. Recovering it needs the cross-page context above;
+  lowering either threshold to reach it would cost far more precision than it buys.
+
 ## Optional OCR (added 2026-09-09) — a deviation, not a port
 
 Requested feature, not upstream parity. Recorded as a deviation in `../CLAUDE.md`

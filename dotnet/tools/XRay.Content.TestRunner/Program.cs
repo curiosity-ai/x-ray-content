@@ -467,6 +467,52 @@ if (args.Length >= 2 && args[0] == "--dump-tables")
     return 0;
 }
 
+// Path dump mode: `--dump-pdfpaths <file> [page] [--words]` prints the geometry one PDF page
+// hands the ruled-table tier — every collected path with its classification, optionally the
+// word boxes — plus what each tier makes of it. A table that does not come out right is almost
+// always a page whose paths are not what they look like (a strikethrough is a line, a shading
+// is a rectangle), and this is how to see that without guessing.
+if (args.Length >= 2 && args[0] == "--dump-pdfpaths")
+{
+    int wantPage = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 0;
+    bool withWords = args.Contains("--words");
+    var pdf = XRay.Content.Internal.Pdf.PdfDocument.Open(File.ReadAllBytes(args[1]));
+    if (pdf is null) { Console.Error.WriteLine($"not a readable PDF: {args[1]}"); return 2; }
+    XRay.Content.Extractors.PdfExtractor.ExtractTextAndSegments(
+        pdf, DateTime.UtcNow.AddMinutes(5).Ticks, XRayOptions.Default,
+        out _, out var pageWords, out var pagePaths);
+
+    for (int i = 0; i < pagePaths.Count; i++)
+    {
+        if (wantPage > 0 && i + 1 != wantPage) continue;
+        Console.WriteLine($"## page {i + 1}: paths={pagePaths[i].Count} words={pageWords[i].Count}");
+        foreach (var path in pagePaths[i])
+        {
+            var b = path.Bbox;
+            var r = path.RenderedBbox();
+            Console.WriteLine(
+                $"  kind={string.Join(",", path.Operations.Select(o => o.Kind))} "
+                + $"stroked={path.Stroked} filled={path.Filled} width={path.StrokeWidth:F2} "
+                + $"primitive={path.IsTablePrimitive()} rule={path.IsRuleCandidate()} "
+                + $"bbox=({b.Left:F1},{b.Top:F1},{b.Right:F1},{b.Bottom:F1}) "
+                + $"rendered=({r.Left:F1},{r.Top:F1},{r.Right:F1},{r.Bottom:F1})");
+        }
+        if (withWords)
+            foreach (var w in pageWords[i])
+                Console.WriteLine($"  word {w.Text} "
+                    + $"bbox=({w.Bbox.Left:F1},{w.Bbox.Top:F1},{w.Bbox.Right:F1},{w.Bbox.Bottom:F1})");
+
+        int strict = XRay.Content.Internal.Pdf.PdfSpatialTables
+            .DetectPageTables(pageWords[i], pagePaths[i], (uint)(i + 1),
+                XRay.Content.Internal.Pdf.TableDetectionConfig.Strict()).Count;
+        int bordered = XRay.Content.Internal.Pdf.PdfSpatialTables
+            .DetectPageTables(pageWords[i], pagePaths[i], (uint)(i + 1),
+                XRay.Content.Internal.Pdf.TableDetectionConfig.Bordered()).Count;
+        Console.WriteLine($"  -> strict={strict} bordered={bordered}");
+    }
+    return 0;
+}
+
 var opts = ParseArgs(args);
 if (opts is null) return 2;
 
