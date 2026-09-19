@@ -124,7 +124,7 @@ native text is never replaced — and **never fatal**: a missing checkpoint, an 
 image, or a recognition that outruns its timeout becomes a `ProcessingWarning`, not an
 exception. A document is not a failure for lacking OCR.
 
-Enabling it loads [PaddleOCR](https://github.com/theolivenbaum/PaddleOCR/), which brings
+Enabling it loads [PaddleOCR](https://github.com/curiosity-ai/PaddleOCR/), which brings
 SkiaSharp, and `PaddleOCR.Pdf`, which brings PDFium to rasterise scanned pages. A caller that
 never sets `Ocr` loads neither. Nothing is downloaded on your behalf: point
 `OcrOptions.ModelDirectory` at a checkpoint you already have.

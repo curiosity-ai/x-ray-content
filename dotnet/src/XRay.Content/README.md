@@ -98,7 +98,7 @@ embedded image and inserts its text inline after the image it came from. OCR is 
 native text is never replaced — and never fatal: a missing checkpoint or an undecodable image
 becomes a `ProcessingWarning`, not an exception.
 
-Turning it on loads [PaddleOCR](https://github.com/theolivenbaum/PaddleOCR/), which brings
+Turning it on loads [PaddleOCR](https://github.com/curiosity-ai/PaddleOCR/), which brings
 SkiaSharp and PDFium. A caller that never sets `Ocr` loads neither. Nothing is downloaded on
 your behalf: point `OcrOptions.ModelDirectory` at a checkpoint you already have.
 

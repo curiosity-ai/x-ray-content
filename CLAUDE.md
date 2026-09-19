@@ -440,7 +440,7 @@ pass**, `XRay.Content.Core.Ocr`, driven by `ExtractionConfig.Ocr`. Three things 
 deviation rather than a port:
 
 1. **Different engine family.** Upstream reaches for Tesseract, or candle-hosted VLMs
-   through `ort`. The port uses [PaddleOCR-VL](https://github.com/theolivenbaum/PaddleOCR/)
+   through `ort`. The port uses [PaddleOCR-VL](https://github.com/curiosity-ai/PaddleOCR/)
    (`PaddleOCR` on NuGet, `PaddleOcrSharp` assembly). Two OCR engines never agree
    character-for-character, so **no golden fixture can compare OCR output across the two
    implementations.** Do not write one. The tests guard the *flow* — gating, placement,
