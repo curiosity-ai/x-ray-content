@@ -70,6 +70,19 @@ public sealed class XRayOptions
     public bool ExcelNumberFormats { get; init; } = true;
 
     /// <summary>
+    /// Extract the files attached to OneNote pages into <c>Children</c>, the way an archive's
+    /// members are. On by default; a caller that stores attachments as files of their own turns
+    /// it off and reads them from the OneNote model instead.
+    /// </summary>
+    public bool OneNoteExtractAttachments { get; init; } = true;
+
+    /// <summary>
+    /// Read every page's earlier versions as well ([MS-ONE] 2.1.17). Off by default: history can
+    /// multiply the size of a section, and the extracted text describes the current page.
+    /// </summary>
+    public bool OneNoteIncludeVersionHistory { get; init; }
+
+    /// <summary>
     /// Fixed part of the per-document wall-clock guard for PDF extraction, in seconds. Also the
     /// floor: a one-page document still gets this long.
     /// </summary>

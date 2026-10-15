@@ -91,7 +91,7 @@ Set `IncludeDocumentStructure = true` to also get the `Document` heading tree, a
 
 ## Formats it reads
 
-48 extractors, covering 97 MIME types across 128 file extensions:
+49 extractors, covering 103 MIME types across 132 file extensions:
 
 - **Office** — Word, Excel, PowerPoint (modern and legacy binary), OpenDocument, RTF,
   WordPerfect, HWP/HWPX, iWork
@@ -104,7 +104,10 @@ Set `IncludeDocumentStructure = true` to also get the `Document` heading tree, a
 - **Academic** — BibTeX and citation formats
 - **Subtitles** — WebVTT
 - **Images** — metadata and EXIF (pixels are read only by the opt-in OCR pass)
-- **Archives** — ZIP, TAR, 7z, GZip, extracted recursively as child documents
+- **OneNote** — sections (`.one`), tables of contents (`.onetoc2`) and packages (`.onepkg`), in
+  both the desktop format and the one OneDrive and SharePoint store; plus a full OneNote object
+  model, Graph-style page HTML and deep links under `XRay.Content.OneNote`
+- **Archives** — ZIP, TAR, 7z, GZip, CAB, extracted recursively as child documents
 - **Source code** — resolved by extension or shebang
 
 ## Optional OCR

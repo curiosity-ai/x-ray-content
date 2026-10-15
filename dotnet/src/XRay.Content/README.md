@@ -78,8 +78,29 @@ Set `IncludeDocumentStructure = true` to also get the `Document` heading tree, a
 Word, Excel, PowerPoint (modern and legacy binary), OpenDocument, RTF, WordPerfect, PDF,
 HTML/XML, Markdown/Djot/AsciiDoc/reStructuredText/Org/Typst/LaTeX, EPUB and FictionBook,
 email (EML, MSG, PST), iWork, HWP/HWPX, images (metadata and EXIF), CSV/TSV/DBF, JSON/YAML/TOML,
-BibTeX and citation formats, Jupyter notebooks, source code, and ZIP/TAR/7z/GZip archives
-(extracted recursively as child documents).
+BibTeX and citation formats, Jupyter notebooks, source code, OneNote (`.one`, `.onetoc2`,
+`.onepkg`, desktop and OneDrive/SharePoint formats), and ZIP/TAR/7z/GZip/CAB archives (extracted
+recursively as child documents).
+
+## OneNote
+
+Beyond extraction, `XRay.Content.OneNote` reads the whole OneNote model:
+
+```csharp
+using XRay.Content.OneNote;
+
+var notebook = OneNoteNotebookReader.ReadPackage(File.ReadAllBytes("Notes.onepkg"), "Notes.onepkg");
+foreach (var page in notebook.AllPages())
+{
+    Console.WriteLine($"{page.Section!.DisplayName} / {page.Title} ({page.Id})");
+    string html = OneNoteHtmlWriter.Write(page);                       // Graph-style page HTML
+    string link = OneNoteLinks.ClientUrl(page, "https://contoso.sharepoint.com/sites/s/Shared%20Documents/Notes/Section.one");
+}
+```
+
+`OneNoteSectionReader` reads one `.one`, `OneNoteNotebookReader` a folder, a package or a set of
+files synced from SharePoint, and `OneStore` exposes the raw object spaces, revisions and
+property sets underneath.
 
 ## Optional OCR
 

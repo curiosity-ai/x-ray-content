@@ -89,3 +89,15 @@ for the same reason.
 Model weights are **not** redistributed: nothing in this repository or its
 package downloads or ships a checkpoint. `OcrOptions.ModelDirectory` names where
 one already is, so whoever stages it accepts its own license.
+
+## OneNote and Microsoft Cabinet support — no third-party code
+
+`src/XRay.Content/OneNote/` and `src/XRay.Content/Internal/Cab/` are written from Microsoft's
+Open Specifications ([MS-ONESTORE], [MS-ONE], [MS-CAB], [MS-MCI], [MS-PATCH]) and contain no code
+from another project. The undocumented property ids and ink conventions were learned by reading
+the MPL-2.0 [onenote.rs](https://github.com/msiemens/onenote.rs) and the MIT
+[Aspose.Note-FOSS-for-Python](https://github.com/aspose-note-foss/Aspose.Note-FOSS-for-Python);
+only facts about the file format were taken from them. Their sample files are used as test
+fixtures (not shipped) under `tests/XRay.Content.Tests/Fixtures/OneNote/`, each folder with its
+licence.
+
