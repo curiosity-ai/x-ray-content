@@ -124,17 +124,18 @@ internal static class PdfScanDetect
 
         int pageCount;
         try { pageCount = doc.PageCount; }
-        catch { return detection; }
+        catch (Exception) when (Cancel.NotCancelling) { return detection; }
 
         for (int i = 0; i < pageCount; i++)
         {
+            Cancel.ThrowIfRequested();
             double score;
             try
             {
                 var signals = PageSignals(doc, i, prior);
                 score = signals is null ? 0.0 : ScorePage(signals);
             }
-            catch { score = 0.0; }
+            catch (Exception) when (Cancel.NotCancelling) { score = 0.0; }
             detection.PageConfidence.Add(score);
         }
 

@@ -49,6 +49,7 @@ public static class JsonRenderer
 
         for (int elemIndex = 0; elemIndex < doc.Elements.Count; elemIndex++)
         {
+            Cancel.Every(elemIndex, 0x3FF);
             var elem = doc.Elements[elemIndex];
             if (!RenderCommon.IsBodyElement(elem)) continue;
 
@@ -265,6 +266,8 @@ public static class JsonRenderer
         var result = new JsonObject();
         if (title is not null) result["title"] = title;
         result["body"] = rootBody;
+        if (doc.Annotations is { Count: > 0 } annotations)
+            result["annotations"] = JsonSerializer.SerializeToNode(annotations, XRay.Content.Types.Json.Options);
         return result;
     }
 

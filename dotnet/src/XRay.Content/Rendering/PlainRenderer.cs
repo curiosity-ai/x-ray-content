@@ -11,8 +11,10 @@ public static class PlainRenderer
         var sb = new StringBuilder(doc.Elements.Count * 80);
         ushort? lastHeadingDepth = null;
 
+        int elementIndex = 0;
         foreach (var elem in doc.Elements)
         {
+            Cancel.Every(elementIndex++, 0x3FF);
             if (elem.Layer != ContentLayer.Body) continue;
             if (elem.Kind.IsContainerStart || elem.Kind.IsContainerEnd) continue;
 
@@ -259,6 +261,17 @@ public static class PlainRenderer
                     sb.Append(elem.Text);
                     sb.Append("\n\n");
                 }
+            }
+        }
+
+        // Document-level PDF annotations (only present when the extractor was asked for them).
+        if (doc.Annotations is { Count: > 0 } annotations)
+        {
+            string block = RenderCommon.RenderAnnotationsPlain(annotations);
+            if (block.Length > 0)
+            {
+                if (sb.ToString().AsSpan().TrimEnd().Length > 0) sb.Append("\n\n");
+                sb.Append(block);
             }
         }
 

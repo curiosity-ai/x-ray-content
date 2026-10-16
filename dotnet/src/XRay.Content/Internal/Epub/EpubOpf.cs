@@ -149,9 +149,9 @@ internal static class EpubOpf
         XDocument doc;
         try
         {
-            doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+            doc = Cancel.ParseXml(xml, LoadOptions.PreserveWhitespace);
         }
-        catch (Exception e)
+        catch (Exception e) when (Cancel.NotCancelling)
         {
             throw new EpubParseException($"Failed to parse OPF file: {e.Message}");
         }

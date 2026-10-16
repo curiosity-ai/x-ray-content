@@ -209,12 +209,16 @@ public sealed class InternalDocument
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ArchiveEntry>? Children { get; set; }
 
+    /// <summary>See <see cref="ExtractedDocument.Attachments"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExtractedAttachment>? Attachments { get; set; }
+
     public string MimeType { get; set; } = "application/octet-stream";
 
     public List<ProcessingWarning> ProcessingWarnings { get; set; } = new();
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<object>? Annotations { get; set; }
+    public List<PdfAnnotation>? Annotations { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PageContent>? PrebuiltPages { get; set; }
@@ -223,7 +227,7 @@ public sealed class InternalDocument
     public string? PreRenderedContent { get; set; }
 
     [JsonIgnore] public List<object>? Revisions { get; set; }
-    [JsonIgnore] public List<object> FormFields { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<PdfFormField>? FormFields { get; set; }
     [JsonIgnore] public List<object> Formulas { get; set; } = new();
 
     private const int MaxUris = 100_000;
@@ -234,6 +238,9 @@ public sealed class InternalDocument
 
     public uint PushElement(InternalElement element)
     {
+        // Every extractor builds its document through here, so this is where a long extraction
+        // notices a cancellation between two elements however its own loops are written.
+        Cancel.Every(Elements.Count, 0x3F);
         uint idx = (uint)Elements.Count;
         Elements.Add(element);
         return idx;
@@ -243,6 +250,7 @@ public sealed class InternalDocument
 
     public uint PushTable(Table table)
     {
+        Cancel.Every(Tables.Count, 0x0F);
         uint idx = (uint)Tables.Count;
         Tables.Add(table);
         return idx;

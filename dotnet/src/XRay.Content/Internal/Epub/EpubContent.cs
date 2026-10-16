@@ -47,6 +47,7 @@ internal static class EpubContent
 
         foreach (var spineItem in package.SpineItems)
         {
+            Cancel.ThrowIfRequested();
             if (!package.Manifest.TryGetValue(spineItem.Idref, out var sourceItem))
             {
                 warnings.Add(new ProcessingWarning
@@ -564,9 +565,9 @@ internal static class EpubContent
         XDocument doc;
         try
         {
-            doc = XDocument.Parse(xhtml, LoadOptions.PreserveWhitespace);
+            doc = Cancel.ParseXml(xhtml, LoadOptions.PreserveWhitespace);
         }
-        catch
+        catch (Exception) when (Cancel.NotCancelling)
         {
             return false;
         }
@@ -631,13 +632,13 @@ internal static class EpubContent
         string sanitized = NormalizeXhtml(xhtml);
         try
         {
-            var doc = XDocument.Parse(sanitized, LoadOptions.PreserveWhitespace);
+            var doc = Cancel.ParseXml(sanitized, LoadOptions.PreserveWhitespace);
             var output = new StringBuilder(xhtml.Length / 2);
             VisitNode(doc, output);
             string result = CollapseBlankLines(output.ToString()).Trim();
             if (result.Length > 0) return result;
         }
-        catch
+        catch (Exception) when (Cancel.NotCancelling)
         {
             // fall through to tag stripping
         }

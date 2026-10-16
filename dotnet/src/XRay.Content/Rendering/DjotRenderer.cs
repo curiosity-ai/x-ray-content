@@ -23,8 +23,10 @@ public static class DjotRenderer
             if (sb.Length == 0 || sb[^1] != '\n') sb.Append('\n');
         }
 
+        int elementIndex = 0;
         foreach (var elem in doc.Elements)
         {
+            Cancel.Every(elementIndex++, 0x3FF);
             if (elem.Layer != ContentLayer.Body) continue;
 
             switch (elem.Kind.Tag)
@@ -98,6 +100,16 @@ public static class DjotRenderer
                 case ElementKindTag.PageBreak:
                     Block("---");
                     break;
+            }
+        }
+
+        if (doc.Annotations is { Count: > 0 } annotations)
+        {
+            string block = RenderCommon.RenderAnnotationsDjot(annotations);
+            if (block.Length > 0)
+            {
+                if (sb.ToString().AsSpan().TrimEnd().Length > 0) sb.Append('\n');
+                sb.Append(block);
             }
         }
 

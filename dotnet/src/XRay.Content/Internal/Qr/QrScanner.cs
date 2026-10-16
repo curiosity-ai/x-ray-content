@@ -32,7 +32,7 @@ internal static class QrScanner
             grey = new byte[width * height];
             image.CopyPixelDataTo(grey);
         }
-        catch (Exception)
+        catch (Exception) when (Cancel.NotCancelling)
         {
             // An undecodable image is not an error here; the post-processor reports "found none".
             return new List<QrResult>();
@@ -110,6 +110,7 @@ internal static class QrScanner
 
         for (int idx = 0; idx < capstones.Count; idx++)
         {
+            Cancel.ThrowIfRequested();
             if (used.Contains(idx)) continue;
 
             foreach (var (h, v) in QrDetector.FindAndRankPossibleNeighbors(capstones, idx))

@@ -84,9 +84,9 @@ internal static class MathMl
         XDocument doc;
         try
         {
-            doc = XDocument.Parse(stripped, LoadOptions.PreserveWhitespace);
+            doc = Cancel.ParseXml(stripped, LoadOptions.PreserveWhitespace);
         }
-        catch
+        catch (Exception) when (Cancel.NotCancelling)
         {
             return "";
         }

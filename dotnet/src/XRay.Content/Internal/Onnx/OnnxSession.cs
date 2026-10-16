@@ -119,6 +119,7 @@ internal sealed class OnnxSession
 
         for (int i = 0; i < _model.Nodes.Length; i++)
         {
+            Cancel.ThrowIfRequested();
             var node = _model.Nodes[i];
             Tensor?[] outputs;
             long startTicks = profile is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
@@ -134,7 +135,7 @@ internal sealed class OnnxSession
                     reused[i] = outputs.Length > 0
                                 && ReferenceEquals(outputs[0]?.Buffer, reusable.Buffer);
             }
-            catch (Exception ex) when (ex is not NotSupportedException)
+            catch (Exception ex) when (ex is not NotSupportedException && Cancel.NotCancelling)
             {
                 throw new InvalidOperationException(
                     $"onnx: node #{i} {node.OpType} ('{node.Name}') failed: {ex.Message}", ex);
@@ -332,6 +333,7 @@ internal sealed class OnnxSession
 
         for (long iteration = 0; iteration < tripCount && condition; iteration++)
         {
+            Cancel.ThrowIfRequested();
             var inner = new Dictionary<string, Tensor>(StringComparer.Ordinal);
             if (body.Inputs.Length > 0)
                 inner[body.Inputs[0].Name] = Tensor.Scalar(iteration);
@@ -396,6 +398,7 @@ internal sealed class OnnxSession
 
         foreach (var inner in graph.Nodes)
         {
+            Cancel.ThrowIfRequested();
             // A subgraph's values are bound by name into a shared scope and never unbound, so
             // nothing here is known to be dead and nothing may be overwritten.
             var outputs = Execute(inner, env, null);

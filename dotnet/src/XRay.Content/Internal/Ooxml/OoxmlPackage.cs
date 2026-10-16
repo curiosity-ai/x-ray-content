@@ -29,7 +29,7 @@ public sealed class OoxmlPackage : IDisposable
         if (!_entries.TryGetValue(Normalize(partName), out var entry)) return null;
         using var s = entry.Open();
         using var ms = new MemoryStream();
-        s.CopyTo(ms);
+        Cancel.CopyTo(s, ms);
         return ms.ToArray();
     }
 
@@ -44,8 +44,8 @@ public sealed class OoxmlPackage : IDisposable
     {
         var text = ReadString(partName);
         if (text is null) return null;
-        try { return XDocument.Parse(text, LoadOptions.PreserveWhitespace); }
-        catch { return null; }
+        try { return Cancel.ParseXml(text, LoadOptions.PreserveWhitespace); }
+        catch (Exception) when (Cancel.NotCancelling) { return null; }
     }
 
     /// <summary>All part names, in archive order.</summary>

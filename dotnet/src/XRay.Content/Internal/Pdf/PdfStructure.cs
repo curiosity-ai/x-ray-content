@@ -225,7 +225,7 @@ public static class PdfStructure
         if (ruledTables is not null)
         {
             try { ruledTables = PdfTableStitch.StitchFragmentedTables(ruledTables, allPageSegments); }
-            catch { }
+            catch (Exception) when (Cancel.NotCancelling) { }
         }
         ruledCoverage ??= ruledTables;
 
@@ -277,7 +277,7 @@ public static class PdfStructure
                         words, hints, i, pageHeights[i], 0.5f,
                         allowSingleColumn: false, prevalidatedColumns: true);
             }
-            catch { pageTables = new List<Table>(); }
+            catch (Exception) when (Cancel.NotCancelling) { pageTables = new List<Table>(); }
             tablesByPage.Add(pageTables);
             coverageByPage.Add(pageTables);
         }
@@ -1713,6 +1713,7 @@ public static class PdfStructure
         // the sequence is not usable until it has seen all pages.
         for (int pageIndex = 0; pageIndex < allPages.Count; pageIndex++)
         {
+            Cancel.ThrowIfRequested();
             float pageHeight = pageIndex < pageHeights.Length ? pageHeights[pageIndex] : FALLBACK_PAGE_HEIGHT_PTS;
             var page = allPages[pageIndex];
             for (int paragraphIndex = 0; paragraphIndex < page.Count; paragraphIndex++)
@@ -2207,6 +2208,7 @@ public static class PdfStructure
         long totalChars = 0;
         for (int pageIdx = 0; pageIdx < allPages.Count; pageIdx++)
         {
+            Cancel.ThrowIfRequested();
             var page = allPages[pageIdx];
             for (int paraIdx = 0; paraIdx < page.Count; paraIdx++)
             {
@@ -2806,6 +2808,7 @@ public static class PdfStructure
         bool hasEmitted = false;
         for (int pageIdx = 0; pageIdx < pages.Count; pageIdx++)
         {
+            Cancel.ThrowIfRequested();
             var paragraphs = pages[pageIdx];
             var pageTables = pageIdx < tablesByPage.Count
                 ? tablesByPage[pageIdx].Where(t => t.Markdown.Trim().Length > 0).ToList()

@@ -72,7 +72,10 @@ public sealed class EpubExtractor : IExtractor
             or Core.OutputFormat.Kind.Djot;
         string[] supportedNamespaces = wantsMarkup ? MarkupSwitchNamespaces : PlainSwitchNamespaces;
         foreach (var spineDoc in spineDocuments)
+        {
+            Cancel.ThrowIfRequested();
             spineDoc.Xhtml = EpubContent.ResolveEpubSwitchElements(spineDoc.Xhtml, supportedNamespaces);
+        }
 
         string? coverImagePath = package.Metadata.CoverImageHref;
         var doc = BuildInternalDocument(archive, spineDocuments, coverImagePath, config.SecurityLimits)
@@ -350,7 +353,7 @@ public sealed class EpubExtractor : IExtractor
                         string slice = System.Text.Encoding.UTF8.GetString(utf8, (int)ann.Start, (int)(ann.End - ann.Start));
                         if (slice.Length > 0) label = slice;
                     }
-                    catch
+                    catch (Exception) when (Cancel.NotCancelling)
                     {
                         label = null;
                     }
@@ -382,9 +385,9 @@ public sealed class EpubExtractor : IExtractor
         System.Xml.Linq.XDocument doc;
         try
         {
-            doc = System.Xml.Linq.XDocument.Parse(sanitized, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+            doc = Cancel.ParseXml(sanitized, System.Xml.Linq.LoadOptions.PreserveWhitespace);
         }
-        catch
+        catch (Exception) when (Cancel.NotCancelling)
         {
             return null;
         }

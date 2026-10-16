@@ -93,7 +93,7 @@ public sealed class OdsExtractor : IExtractor
             using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
             return XRay.Content.Internal.Odf.OdfMetadata.Extract(archive);
         }
-        catch
+        catch (Exception) when (Cancel.NotCancelling)
         {
             // A spreadsheet whose meta.xml is absent or malformed still has its sheets.
             return null;
@@ -232,7 +232,7 @@ public sealed class OdsExtractor : IExtractor
 
         XDocument content;
         using (var s = entry.Open())
-            content = XDocument.Load(s, LoadOptions.PreserveWhitespace);
+            content = XDocument.Load(Cancel.Poll(s), LoadOptions.PreserveWhitespace);
 
         var sheets = new List<OdsSheet>();
         foreach (var table in content.Descendants().Where(e => e.Name.LocalName == "table"

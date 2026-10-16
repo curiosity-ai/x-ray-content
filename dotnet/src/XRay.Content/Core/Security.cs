@@ -206,6 +206,9 @@ public sealed class SecurityBudget
     public void Step()
     {
         _iterations = SaturatingAdd(_iterations, 1);
+        // Every parser that charges its loop turns to a budget — CSV, XML, JSON, iWork — notices a
+        // cancellation here without a check of its own.
+        Cancel.Every(_iterations, 0xFF);
         if (_iterations > _maxIterations)
             throw SecurityException.TooManyIterations(_iterations, _maxIterations);
     }
@@ -340,7 +343,7 @@ public static class ZipBombValidator
         {
             Validate(archive, limits ?? new SecurityLimits());
         }
-        catch
+        catch (Exception) when (Cancel.NotCancelling)
         {
             archive.Dispose();
             throw;
@@ -379,7 +382,7 @@ public static class ZipBombValidator
                 compressed = (ulong)entries[index].CompressedLength;
                 uncompressed = (ulong)entries[index].Length;
             }
-            catch (Exception e)
+            catch (Exception e) when (Cancel.NotCancelling)
             {
                 throw SecurityException.UnreadableEntry(index, e.Message);
             }

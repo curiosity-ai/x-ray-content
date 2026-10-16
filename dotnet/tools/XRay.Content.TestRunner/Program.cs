@@ -902,6 +902,31 @@ static void MetadataNormalizer(JsonObject obj)
             ao.Remove(k);
     obj.Remove("extraction_duration_ms");
     obj.Remove("output_format");
+
+    // Port additions to a PDF's metadata that upstream's goldens cannot carry: encryption detail,
+    // the outline, the catalog language, custom Info entries and extra XMP properties. They add
+    // information without changing any field upstream reports, so a golden comparison ignores them.
+    // The metadata object is visited once as itself (where `additional` and `language` live) and
+    // once as the nested `format` object (where the payload fields live); either may carry the tag.
+    bool pdfHere = obj.TryGetPropertyValue("format_type", out var formatType)
+        && formatType is JsonValue fv && fv.TryGetValue<string>(out var ft) && ft == "pdf";
+    bool pdfNested = obj.TryGetPropertyValue("format", out var nestedFormat) && nestedFormat is JsonObject nf
+        && nf.TryGetPropertyValue("format_type", out var nft) && nft is JsonValue nv
+        && nv.TryGetValue<string>(out var nvs) && nvs == "pdf";
+    if (pdfHere)
+        foreach (var k in new[]
+        {
+            "requires_password", "authenticated_as", "encryption_algorithm", "encryption_key_bits",
+            "permissions", "outline",
+        })
+            obj.Remove(k);
+    if (pdfHere || pdfNested)
+    {
+        obj.Remove("language");
+        if (obj.TryGetPropertyValue("additional", out var pdfAdd) && pdfAdd is JsonObject pdfAo)
+            foreach (var k in new[] { "pdf_catalog_version", "pdf_info", "xmp" })
+                pdfAo.Remove(k);
+    }
 }
 
 // The per-table `markdown` string tracks the (not-yet-exact) markdown renderer; compare cells only.
