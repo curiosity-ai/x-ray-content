@@ -3,7 +3,6 @@
 # X-Ray.Content
 
 [![X-Ray.Content](https://img.shields.io/nuget/v/X-Ray.Content?label=X-Ray.Content&color=5c2d91&logo=nuget&logoColor=white)](https://www.nuget.org/packages/X-Ray.Content/)
-[![X-Ray](https://img.shields.io/nuget/v/X-Ray?label=X-Ray%20%28umbrella%29&color=5c2d91&logo=nuget&logoColor=white)](https://www.nuget.org/packages/X-Ray/)
 [![License](https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-007ec6)](dotnet/THIRD_PARTY_NOTICES.md)
 
 Content extraction for .NET. Point it at a document — Office, PDF, HTML, email, an archive —
@@ -20,24 +19,9 @@ The optional OCR pass is the one documented exception, and it is off by default.
 dotnet add package X-Ray.Content
 ```
 
-Or take the whole family through its umbrella package:
-
-```sh
-dotnet add package X-Ray
-```
-
-[**`X-Ray`**](https://www.nuget.org/packages/X-Ray/) is the family's **root package**. It
-contains no code — installing it pulls in every X-Ray package, so a consumer who wants all of
-them writes one line instead of tracking the list as it grows.
-
-| Package | What it is |
-|---|---|
-| [`X-Ray`](https://www.nuget.org/packages/X-Ray/) | The umbrella. No code; installs every member below. |
-| [`X-Ray.Content`](https://www.nuget.org/packages/X-Ray.Content/) | Content extraction. The subject of this README. |
-
-Reach for `X-Ray.Content` directly if it is all you need — nothing is lost by doing so, and a
-future family member cannot then arrive in your build without you asking for it. Reach for
-`X-Ray` when you want the family to grow with you.
+The whole family is also available through its umbrella package,
+[`X-Ray`](https://www.nuget.org/packages/X-Ray/), which contains no code and installs every X-Ray
+package. It is built in its own repository, [curiosity-ai/x-ray](https://github.com/curiosity-ai/x-ray).
 
 Package ids are hyphenated; the API lives under the `XRay.Content` namespace, since a hyphen is
 not valid in a C# identifier. Targets `net10.0`.
@@ -91,7 +75,7 @@ Set `IncludeDocumentStructure = true` to also get the `Document` heading tree, a
 
 ## Formats it reads
 
-48 extractors, covering 97 MIME types across 128 file extensions:
+49 extractors, covering 103 MIME types across 130 file extensions:
 
 - **Office** — Word, Excel, PowerPoint (modern and legacy binary), OpenDocument, RTF,
   WordPerfect, HWP/HWPX, iWork
@@ -104,6 +88,10 @@ Set `IncludeDocumentStructure = true` to also get the `Document` heading tree, a
 - **Academic** — BibTeX and citation formats
 - **Subtitles** — WebVTT
 - **Images** — metadata and EXIF (pixels are read only by the opt-in OCR pass)
+- **Photoshop** — PSD and PSB: the layer tree as headings, type-layer text beneath its layer,
+  embedded smart objects, and document facts as metadata, read through
+  [`X-Ray.Psd`](https://github.com/curiosity-ai/x-ray-others) without decoding a pixel. An X-Ray
+  addition: upstream Xberg does not extract Photoshop files
 - **Archives** — ZIP, TAR, 7z, GZip, extracted recursively as child documents
 - **Source code** — resolved by extension or shebang
 
@@ -134,16 +122,12 @@ never sets `Ocr` loads neither. Nothing is downloaded on your behalf: point
 ```
 dotnet/
   src/XRay.Content/   the content-extraction package
-  src/XRay/           the X-Ray umbrella package (dependencies only, no code)
   tests/, tools/      unit tests, the corpus parity runner, dev helpers
 .reference/           the upstream Xberg tree, verbatim — not built, not published
 test_documents/       the fixture corpus (submodule; binaries fetched separately)
 CLAUDE.md             architecture, scope, porting conventions
-.devops/              the Azure Pipelines job that publishes the family
+.devops/              the Azure Pipelines job that publishes X-Ray.Content
 ```
-
-Both packages ship from one pipeline run at one version, which is what keeps the umbrella's
-dependency on `X-Ray.Content` pinned to the same commit.
 
 ## Building from source
 
@@ -152,6 +136,11 @@ cd dotnet
 dotnet build XRay.Content.sln -c Release
 dotnet test  tests/XRay.Content.Tests/XRay.Content.Tests.csproj -c Release
 ```
+
+The PSD/PSB extractor builds against [`X-Ray.Psd`](https://github.com/curiosity-ai/x-ray-others),
+whose version is the `XRayPsdVersion` property in `src/XRay.Content/XRay.Content.csproj`. Until
+that version is on nuget.org, pack the library into a local feed and point restore at it with
+`-p:RestoreAdditionalProjectSources=<feed>`; the csproj comment has the commands.
 
 A handful of tests read binary fixtures from the `test_documents` corpus, which is not in git:
 
