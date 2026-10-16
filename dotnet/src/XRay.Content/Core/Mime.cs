@@ -221,6 +221,11 @@ public static class Mime
     /// <summary>How much of a file upstream reads when checking content against the extension.</summary>
     private const int MagicHeaderBytes = 4096;
 
+    /// <summary>OneNote sections, tables of contents and packages ([MS-ONESTORE]).</summary>
+    public const string OneNoteMimeType = "application/onenote";
+
+    public const string CabinetMimeType = "application/vnd.ms-cab-compressed";
+
     private const string DocbookMimeType = "application/docbook+xml";
     private const string JatsMimeType = "application/x-jats+xml";
 
@@ -479,6 +484,9 @@ public static class Mime
 
     private static string? SniffMagic(ReadOnlySpan<byte> b)
     {
+        if (OneNote.Store.OneStore.IsOneStore(b)) return OneNoteMimeType;
+        if (b.Length >= 8 && b[0] == 0x4D && b[1] == 0x53 && b[2] == 0x43 && b[3] == 0x46 && b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0)
+            return CabinetMimeType;
         if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";
         if (b.Length >= 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "image/png";
         if (b.Length >= 3 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) return "image/gif";
@@ -587,6 +595,8 @@ public static class Mime
         Add("text/mdx", "mdx");
         Add("text/x-djot", "djot", "dj");
         Add("application/pdf", "pdf");
+        Add(OneNoteMimeType, "one", "onetoc2", "onepkg");
+        Add(CabinetMimeType, "cab");
         Add("text/html", "html", "htm");
         Add("application/xhtml+xml", "xhtml", "xht");
         Add("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx");

@@ -42,6 +42,10 @@ port of it — off by default, opt-in, and a different engine. See
 renders a spreadsheet's cells the way the spreadsheet shows them — see
 [Deviation: formatted Excel cells](#deviation-formatted-excel-cells).
 
+**OneNote is an addition, not a port.** Upstream has no OneNote support at all; the
+`XRay.Content.OneNote` namespace and the CAB reader it needs are written from Microsoft's
+specifications. See [Addition: OneNote](#addition-onenote).
+
 ---
 
 ## Architecture (mirrors the Rust crate)
@@ -647,4 +651,73 @@ so a consumer whose graph resolves the newer package gets a `MissingMethodExcept
 symptom is a scanned PDF that quietly reads empty and an OCR pass that looks much *faster*.
 Keep `PaddleOCR` and `PaddleOCR.Pdf` on the same version, and publish a rebuilt package when
 they move.
+
+---
+
+## Addition: OneNote
+
+Upstream xberg reads no OneNote format, so nothing here is a port and no golden covers it.
+`XRay.Content.OneNote` is written from [MS-ONESTORE] (both encodings), [MS-ONE] (the content
+model) and [MS-CAB]; the undocumented parts — ink, handwriting recognition, math runs, embedded
+web content — follow what OneNote writes. It is a general-purpose library, not only an
+extractor: the store, the content model, notebook assembly, Graph-style page HTML and OneNote's
+deep links are all public.
+
+### Layers
+
+| Layer | Where | What |
+|---|---|---|
+| CAB | `Internal/Cab/` | `.onepkg` is a cabinet; LZX (with E8 translation), MSZIP and stored folders |
+| Store | `OneNote/Store/` | `OneStore.Read` sniffs the header and dispatches to `RevisionStoreReader` (desktop, [MS-ONESTORE] 2.3-2.6) or `FsshttpbPackageReader` (OneDrive / SharePoint, 2.7-2.8). Both produce the same model: object spaces, revisions labelled by (context, role), objects with resolved property sets |
+| Content | `OneNote/Model.cs`, `OneNoteSectionReader` | Sections, pages, title blocks, outlines, rich text runs and hyperlinks, lists, tables, images, attachments, note tags, ink, handwriting recognition, conflict pages, version history |
+| Notebook | `OneNoteNotebookReader` | A folder, a `.onepkg`, or any path→bytes map (files synced from SharePoint): `.onetoc2` order and colours, section groups, the recycle bin, `_onefiles` |
+| Output | `OneNoteDocumentBuilder`, `OneNoteHtmlWriter` | The InternalDocument the extractor renders (one result page per OneNote page, `Metadata.Additional["onenote"]` with every page's id); and HTML shaped like the Graph's page content |
+| Links | `OneNoteLinks`, `GraphOneNoteId` | Build and parse `onenote:` and `wd=target(...)` links; split Graph ids |
+
+`OneNoteExtractor` claims `application/onenote` (and `msonenote`) and cabinets. A cabinet with no
+`.one`/`.onetoc2` in it goes through the archive path, so `.cab` files are now read as well.
+
+### Things the specs do not say, found against real files
+
+Each of these broke a real file before it was handled; keep them.
+
+- **A transaction log fragment's `nextFragment` follows the entry table** (at `8 *
+  floor((cb - 12) / 8)`), not the last 12 bytes. Read from the end, a fragment whose size leaves
+  four spare bytes yields garbage and the section silently comes back as an old revision.
+- **`cTransactionsInLog` can exceed the sentinels in the log.** Stop when the next fragment is
+  out of range rather than failing.
+- **A desktop `.onetoc2` can carry an FSSHTTPB package right after its transaction log** (legacy
+  file version nil). `RevisionStoreReader` checks there first.
+- **In FSSHTTPB, a nil CompactID takes no slot in the object's extended-GUID array.** References
+  are positional, skipping nils, when the two lengths differ.
+- **`TextRunFormatting` may carry one entry more than there are runs, starting with a nil:** the
+  nil styles a leading U+000B run. When the first entry is not nil and the text starts with U+000B,
+  the formatting is instead laid out as if that run did not exist; realign it.
+- **Hyperlinks are field codes:** a hidden run holding `U+FDDF HYPERLINK "url"`, then the visible
+  hyperlink-styled runs. The visible text drops the hidden runs.
+- **`NumberListFormat` contains NULs** (the numbering format character 0 is decimal); it cannot be
+  read as a NUL-terminated string. Its first character is the length.
+- **A version history page's manifest points back at the same version history.** Versions and
+  conflict pages are read only for top-level pages; reading them recursively never ends.
+- **`VersionContextNodes` has no id in [MS-ONE]**; OneNote writes it under
+  `VersionHistoryGraphSpaceContextNodes`' id (0x3400347B).
+- **Ink paths are delta-encoded** per dimension (the first value absolute).
+- **A section's link id (`section-id`) is its metadata's `FileIdentityGuid` when present**, else
+  the file's own identity. They differ once a section is copied or re-uploaded; links made inside
+  the notebook keep the metadata one. A page's link id (`page-id`) is its metadata's
+  `NotebookManagementEntityGuid` ([MS-ONE] 2.2.58). Both were confirmed by resolving the
+  `onenote:` links stored inside a sample notebook against its pages.
+
+### Testing
+
+`OneNoteTests` reads real files in `tests/XRay.Content.Tests/Fixtures/OneNote/` (MIT and MPL-2.0
+samples; the README there says which). While the reader was written, the page titles, page ids
+and every paragraph's text of 62 sections in both encodings were compared against the
+`onenote.rs` parser and matched; the CAB reader's output was compared byte for byte against the
+Rust `cab` crate. Neither oracle is part of the build. A fuzz test asserts that corrupted input
+fails with `OneNoteFormatException` and never with anything else.
+
+What is not verified against Microsoft: that a `.one` downloaded through the Graph drive API from
+SharePoint carries the same `section-id` its Graph `links` do, and the Graph's own page HTML. The
+HTML writer follows the documented output shape, not a captured response.
 
