@@ -26,16 +26,13 @@
 
   <PropertyGroup>
     <!-- The X-Ray.Psd version PsdExtractor builds against (the family's PSD/PSB reader, published
-         from curiosity-ai/x-ray-others). THIS MUST BE SET TO THE FIRST PUBLISHED VERSION: until
-         X-Ray.Psd is on nuget.org, the placeholder below resolves only from a local feed, so a
-         restore anywhere else fails loudly rather than picking up something unintended. Change
-         this one line; nothing else names the version. For a local build against an unpublished
-         package, pack it and pass the feed and version on the command line:
-           dotnet pack <x-ray-psd>/src/XRay.Psd -c Release -p:PackageId=X-Ray.Psd -p:Version=0.1.0-local -o <feed>
-           dotnet build dotnet/XRay.Content.sln -p:RestoreAdditionalProjectSources=<feed>
-         (or export RestoreAdditionalProjectSources=<feed>). Its core takes no dependencies, so
-         this keeps extraction pure managed. -->
-    <XRayPsdVersion Condition="'$(XRayPsdVersion)' == ''">0.1.0-local</XRayPsdVersion>
+         from curiosity-ai/x-ray-others). Change this one line to move to a newer one; nothing else
+         names the version. For a local build against an unpublished X-Ray.Psd, pack it and pass the
+         feed and version on the command line:
+           dotnet pack <x-ray-psd>/src/XRay.Psd -c Release -p:Version=0.1.0-local -o <feed>
+           dotnet build dotnet/XRay.Content.sln -p:XRayPsdVersion=0.1.0-local -p:RestoreAdditionalProjectSources=<feed>
+         Its core takes no dependencies, so this keeps extraction pure managed. -->
+    <XRayPsdVersion Condition="'$(XRayPsdVersion)' == ''">26.10.6966</XRayPsdVersion>
   </PropertyGroup>
 
   <ItemGroup>
