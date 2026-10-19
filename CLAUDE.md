@@ -182,8 +182,8 @@ Port the native-only path. `derive.rs` is large; port incrementally, guided by g
 
 | Rust crate | Purpose | C# replacement |
 |---|---|---|
-| `image` | Image decode/encode/resize | **SixLabors.ImageSharp** |
-| (font metrics, PDF glyphs) | Font parsing | **SixLabors.Fonts** |
+| `image` | Image decode/encode/resize | Headers, EXIF and the triangle resize are managed (`Internal/Imaging`, `Internal/Exif`); pixel decoding is **SkiaSharp** (`SkiaImages`, opt-in paths only). No SixLabors package: its licence is not free for a company. |
+| (font metrics, PDF glyphs) | Font parsing | Own parsers inside the PDF reader; no font package. |
 | `blake3` | Element IDs | Port BLAKE3 (small) or a vetted C# BLAKE3 package; must match bytes. |
 | `serde`/`serde_json` | (De)serialization | `System.Text.Json` with custom converters for the tagged enums. |
 | `zip` | OOXML/ODF/EPUB/iWork containers | `System.IO.Compression.ZipArchive`. |
@@ -366,7 +366,10 @@ The loop that works:
   portable package cannot. See `dotnet/tools/onnx-parity/README.md` for how that runtime is
   validated against ONNX Runtime layer by layer.
   The optional OCR pass is the single documented exception — it pulls native code in
-  transitively, which is why it is off by default. See
+  transitively, which is why it is off by default. SkiaSharp is that same native library, and the
+  package uses it only where pixels must be decoded (the opt-in QR scan, and a caller handing the
+  layout models a page): an image's size, format and EXIF come from `ImageHeader` / `TiffExif`
+  without loading it, so a default extraction stays pure managed. See
   [Deviation: optional OCR](#deviation-optional-ocr).
 
 ---
@@ -408,7 +411,7 @@ archive extracting a member, a PDF extracting an attachment) keeps the outer one
   (also the bomb ceiling: it stops at a size limit), `Cancel.ReadToEnd`, `Cancel.ParseXml` (use it
   instead of `XDocument.Parse`), `Cancel.Poll(stream)` for a parser that pulls from a stream.
 - **What cannot be interrupted:** one call into a library that has no token. `System.Text.Json`
-  parsing a single large document, ImageSharp decoding, `X-Ray.Psd`'s `Load`/`ExtractText` (until it
+  parsing a single large document, SkiaSharp decoding, `X-Ray.Psd`'s `Load`/`ExtractText` (until it
   ships token overloads, `PsdExtractor` checks between layers and before each stage), PDFium's
   rasterisation of a page. Latency there is that one call; say so rather than pretending.
 - **Lower-level public APIs** get their counterparts in `Core/CancellableApi` as extension or

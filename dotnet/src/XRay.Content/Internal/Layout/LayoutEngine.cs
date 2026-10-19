@@ -1,5 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -148,17 +147,17 @@ internal sealed class LayoutEngine
     };
 
     /// <summary>Detect the layout regions of one page.</summary>
-    public DetectionResult Detect(Image<Rgb24> page) => DetectBatch([page])[0];
+    public DetectionResult Detect(RgbImage page) => DetectBatch([page])[0];
 
     /// <summary>
-    /// <see cref="Detect(Image{Rgb24})"/>, cancellable: the token is polled between the network's
+    /// <see cref="Detect(RgbImage)"/>, cancellable: the token is polled between the network's
     /// operators and its parallel tiles, so a cancelled detection stops within one operator.
     /// </summary>
-    public DetectionResult Detect(Image<Rgb24> page, CancellationToken cancellationToken) =>
+    public DetectionResult Detect(RgbImage page, CancellationToken cancellationToken) =>
         DetectBatch([page], cancellationToken)[0];
 
-    /// <summary><see cref="DetectBatch(IReadOnlyList{Image{Rgb24}})"/>, cancellable.</summary>
-    public IReadOnlyList<DetectionResult> DetectBatch(IReadOnlyList<Image<Rgb24>> pages, CancellationToken cancellationToken)
+    /// <summary><see cref="DetectBatch(IReadOnlyList{RgbImage})"/>, cancellable.</summary>
+    public IReadOnlyList<DetectionResult> DetectBatch(IReadOnlyList<RgbImage> pages, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var scope = Cancel.Begin(cancellationToken);
@@ -173,7 +172,7 @@ internal sealed class LayoutEngine
     /// per call, so stacking pages amortises that traffic. YOLO runs a page at a time, which is
     /// what the Rust does too.
     /// </remarks>
-    public IReadOnlyList<DetectionResult> DetectBatch(IReadOnlyList<Image<Rgb24>> pages)
+    public IReadOnlyList<DetectionResult> DetectBatch(IReadOnlyList<RgbImage> pages)
     {
         if (pages.Count == 0) return [];
         Cancel.ThrowIfRequested();

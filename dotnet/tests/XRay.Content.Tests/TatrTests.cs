@@ -1,5 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using XRay.Content.Internal.Imaging;
 using XRay.Content.Internal.Layout;
 using Xunit;
 
@@ -292,7 +291,7 @@ public class TatrTests
     [Fact]
     public void PreprocessDetrOutputShape()
     {
-        using var image = new Image<Rgb24>(640, 480);
+        var image = new RgbImage(640, 480);
         var (width, height) = TatrModel.ComputeDetrResize(image.Width, image.Height);
         Assert.Equal(1000, width);
         Assert.Equal(750, height);

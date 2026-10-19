@@ -345,10 +345,6 @@ public class QrTests
         int size = (n + border * 2) * scale;
         var grey = Render(modules, scale, border);
 
-        using var image = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.L8>(
-            grey, size, size);
-        using var ms = new MemoryStream();
-        image.Save(ms, new SixLabors.ImageSharp.Formats.Png.PngEncoder());
-        return ms.ToArray();
+        return TestImages.GreyPng(grey, size, size);
     }
 }

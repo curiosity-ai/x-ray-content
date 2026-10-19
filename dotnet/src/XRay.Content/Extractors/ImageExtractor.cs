@@ -4,14 +4,13 @@
 // mirrors the Rust `config.effective_disable_ocr()` branch: build a metadata-only document
 // carrying an Image element plus `ImageMetadata` (width, height, format, exif), attaching the
 // image's bytes when `config.needs_image_data()`. Dimensions and format come from
-// SixLabors.ImageSharp; EXIF from the ImageSharp ExifProfile (see ExifReader).
+// the file's own headers (ImageHeader — no pixel is decoded and no native library is loaded);
+// EXIF from the TIFF block they carry (see ExifReader).
 
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using XRay.Content.Core;
 using XRay.Content.Internal.Exif;
 using XRay.Content.Internal.Heif;
+using XRay.Content.Internal.Imaging;
 using XRay.Content.Types;
 
 namespace XRay.Content.Extractors;
@@ -33,7 +32,7 @@ public sealed class ImageExtractor : IExtractor
         "image/x-tiff",
         "image/gif",
 
-        // HEIF-family containers. ImageSharp cannot read these, so their metadata comes from
+        // HEIF-family containers. The raster header reader cannot read these, so their metadata comes from
         // the container description instead; see HeifContainer for what that does and does not
         // cover.
         "image/heic",
@@ -112,21 +111,21 @@ public sealed class ImageExtractor : IExtractor
         if (!mimeType.Contains("tiff", StringComparison.OrdinalIgnoreCase)) return;
 
         int frameCount;
-        try { frameCount = Image.Identify(bytes).FrameMetadataCollection.Count; }
-        catch (Exception) when (Cancel.NotCancelling) { return; }
+        try { frameCount = ImageHeader.Read(bytes).FrameCount; }
+        catch (InvalidDataException) { return; }
 
         DocumentLimits.EnforcePageCount(frameCount, limits);
     }
 
     private static ImageMetadata RasterMetadata(byte[] bytes)
     {
-        ImageInfo info = Image.Identify(bytes);
+        ImageHeader header = ImageHeader.Read(bytes);
         return new ImageMetadata
         {
-            Width = (uint)info.Width,
-            Height = (uint)info.Height,
-            Format = FormatName(info.Metadata.DecodedImageFormat),
-            Exif = ExifReader.Extract(info.Metadata.ExifProfile),
+            Width = (uint)header.Width,
+            Height = (uint)header.Height,
+            Format = header.Format,
+            Exif = ExifReader.Extract(header.Exif.Span),
         };
     }
 
@@ -150,25 +149,7 @@ public sealed class ImageExtractor : IExtractor
             Format = "HEIF",
             // A file with no EXIF item yields an empty map, the same as a raster image
             // whose profile is absent.
-            Exif = ExifReader.Extract(info.Exif is { Length: > 0 } exif ? ReadExifProfile(exif) : null),
+            Exif = ExifReader.Extract(info.Exif is { Length: > 0 } exif ? exif : ReadOnlySpan<byte>.Empty),
         };
     }
-
-    /// <summary>Read a bare TIFF block as an EXIF profile, or nothing if it will not parse.</summary>
-    private static ExifProfile? ReadExifProfile(byte[] exif)
-    {
-        try
-        {
-            return new ExifProfile(exif);
-        }
-        catch (Exception e) when (e is ArgumentException or IndexOutOfRangeException)
-        {
-            return null;
-        }
-    }
-
-    // Rust uses `format!("{:?}", image::ImageFormat).to_uppercase()`; ImageSharp's format
-    // name maps 1:1 for the common raster formats (PNG/JPEG/GIF/BMP/TIFF/WEBP).
-    private static string FormatName(IImageFormat? format) =>
-        format?.Name.ToUpperInvariant() ?? "";
 }

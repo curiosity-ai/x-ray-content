@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Qr;
 
@@ -26,11 +24,7 @@ internal static class QrScanner
         int width, height;
         try
         {
-            using var image = Image.Load<L8>(imageBytes);
-            width = image.Width;
-            height = image.Height;
-            grey = new byte[width * height];
-            image.CopyPixelDataTo(grey);
+            (width, height, grey) = SkiaImages.DecodeGrey(imageBytes);
         }
         catch (Exception) when (Cancel.NotCancelling)
         {

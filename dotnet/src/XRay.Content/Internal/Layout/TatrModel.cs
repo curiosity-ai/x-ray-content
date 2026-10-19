@@ -1,8 +1,5 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-
 using XRay.Content.Internal.Onnx;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -162,7 +159,7 @@ internal sealed class TatrModel
     };
 
     /// <summary>Recognise table structure from a cropped table image.</summary>
-    public TatrResult Recognize(Image<Rgb24> tableImage)
+    public TatrResult Recognize(RgbImage tableImage)
     {
         float imageWidth = tableImage.Width;
         float imageHeight = tableImage.Height;
@@ -251,14 +248,9 @@ internal sealed class TatrModel
     /// toolchains and the constants are not interchangeable.
     /// </remarks>
     internal static void PreprocessDetr(
-        Image<Rgb24> image, float[] destination, int newWidth, int newHeight, int offset = 0)
+        RgbImage image, float[] destination, int newWidth, int newHeight, int offset = 0)
     {
-        using var resized = image.Clone(context => context.Resize(new ResizeOptions
-        {
-            Size = new Size(newWidth, newHeight),
-            Sampler = KnownResamplers.Triangle, // bilinear, matching image::imageops::Triangle
-            Mode = ResizeMode.Stretch,
-        }));
+        var resized = image.ResizeTriangle(newWidth, newHeight);
 
         int plane = newWidth * newHeight;
         const float inv255 = 1.0f / 255.0f;
