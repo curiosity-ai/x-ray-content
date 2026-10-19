@@ -517,7 +517,7 @@ usual parse failure. Detection: `8BPS` in `Mime.SniffMagic`, and `psd`/`psb` in 
   depth, channel count, resolution, ICC profile, channel and path names, layer comps, slices (whose
   URLs also become `Uris`), fonts, linked file names and the outer document's layer counts.
 
-**The version lives in one place**: `XRayPsdVersion` in `XRay.Content.csproj`. It points at the published X-Ray.Psd (26.10.6966); to
+**The version lives in one place**: `XRayPsdVersion` in `XRay.Content.csproj`. It points at the published X-Ray.Psd (26.10.7019); to
 build against an unpublished one, pack the library and pass `-p:XRayPsdVersion=<v>` with
 `-p:RestoreAdditionalProjectSources=<feed>` (the csproj comment has the commands). Tests: `PsdExtractorTests` (fixtures from
 `test_documents/psd/`, skipped when absent) and `SyntheticPsd`, a trimmed writer from Patchy's test
