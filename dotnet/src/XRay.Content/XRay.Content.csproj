@@ -32,7 +32,7 @@
            dotnet pack <x-ray-psd>/src/XRay.Psd -c Release -p:Version=0.1.0-local -o <feed>
            dotnet build dotnet/XRay.Content.sln -p:XRayPsdVersion=0.1.0-local -p:RestoreAdditionalProjectSources=<feed>
          Its core takes no dependencies, so this keeps extraction pure managed. -->
-    <XRayPsdVersion Condition="'$(XRayPsdVersion)' == ''">26.10.6966</XRayPsdVersion>
+    <XRayPsdVersion Condition="'$(XRayPsdVersion)' == ''">26.10.7019</XRayPsdVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -72,8 +72,8 @@
          calls a four-argument overload that no longer exists, so a consumer whose graph resolves
          the newer package gets a MissingMethodException inside ScanOnly. OCR is never fatal here,
          so that surfaces as a processing warning and a scanned page that silently reads empty. -->
-    <PackageReference Include="PaddleOCR" Version="26.9.5064" />
-    <PackageReference Include="PaddleOCR.Pdf" Version="26.9.5064" />
+    <PackageReference Include="PaddleOCR" Version="26.9.5517" />
+    <PackageReference Include="PaddleOCR.Pdf" Version="26.9.5517" />
   </ItemGroup>
 
 </Project>
