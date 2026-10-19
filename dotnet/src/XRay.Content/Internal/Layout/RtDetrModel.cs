@@ -1,7 +1,5 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using XRay.Content.Internal.Onnx;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -55,7 +53,7 @@ internal sealed class RtDetrModel
     public string Name => "Docling RT-DETR v2";
 
     /// <summary>Detect layout regions in a page image.</summary>
-    public IReadOnlyList<LayoutDetection> Detect(Image<Rgb24> page, float threshold = DefaultThreshold) =>
+    public IReadOnlyList<LayoutDetection> Detect(RgbImage page, float threshold = DefaultThreshold) =>
         DetectBatch([page], threshold)[0];
 
     /// <summary>
@@ -67,7 +65,7 @@ internal sealed class RtDetrModel
     /// </para>
     /// </summary>
     public IReadOnlyList<IReadOnlyList<LayoutDetection>> DetectBatch(
-        IReadOnlyList<Image<Rgb24>> pages, float threshold = DefaultThreshold)
+        IReadOnlyList<RgbImage> pages, float threshold = DefaultThreshold)
     {
         if (pages.Count == 0) return [];
 
@@ -157,6 +155,6 @@ internal sealed class RtDetrModel
     /// Rescale-only preprocessing at this model's input resolution.
     /// </summary>
     /// <remarks>Delegates to the shared implementation; see <see cref="LayoutPreprocessing"/>.</remarks>
-    internal static void PreprocessRescale(Image<Rgb24> page, float[] destination, int offset = 0) =>
+    internal static void PreprocessRescale(RgbImage page, float[] destination, int offset = 0) =>
         LayoutPreprocessing.PreprocessRescale(page, destination, InputSize, offset);
 }

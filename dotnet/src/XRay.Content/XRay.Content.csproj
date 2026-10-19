@@ -53,8 +53,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
-    <PackageReference Include="SixLabors.Fonts" Version="2.0.9" />
+    <!-- Pixel decoding only: the QR scan (opt-in) and the layout models' page loader. An image's
+         dimensions, format and EXIF are read from its headers (Internal/Imaging/ImageHeader), so an
+         ordinary extraction never loads the native library. The native assets come with PaddleOCR. -->
+    <PackageReference Include="SkiaSharp" Version="4.150.1" />
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.11" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.0" />
     <!-- PSD/PSB structure and text; see XRayPsdVersion above. -->

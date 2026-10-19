@@ -1,8 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Text;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using XRay.Content.Core;
 using XRay.Content.Extractors;
 using XRay.Content.Types;
@@ -160,13 +158,7 @@ public class ArchiveImageTests
     [Fact]
     public void Image_Png_ExtractsDimensionsAndFormat()
     {
-        byte[] png;
-        using (var img = new Image<Rgb24>(7, 3))
-        using (var ms = new MemoryStream())
-        {
-            img.SaveAsPng(ms);
-            png = ms.ToArray();
-        }
+        byte[] png = TestImages.Png(7, 3);
 
         var doc = new ImageExtractor().Extract(png, "image/png", new ExtractionConfig());
         var meta = Assert.IsType<ImageMetadata>(doc.Metadata.Format!.Payload);
@@ -179,13 +171,7 @@ public class ArchiveImageTests
     [Fact]
     public void Image_Jpeg_ReportsJpegFormat()
     {
-        byte[] jpeg;
-        using (var img = new Image<Rgb24>(16, 8))
-        using (var ms = new MemoryStream())
-        {
-            img.SaveAsJpeg(ms);
-            jpeg = ms.ToArray();
-        }
+        byte[] jpeg = TestImages.Jpeg(16, 8);
 
         var doc = new ImageExtractor().Extract(jpeg, "image/jpeg", new ExtractionConfig());
         var meta = Assert.IsType<ImageMetadata>(doc.Metadata.Format!.Payload);

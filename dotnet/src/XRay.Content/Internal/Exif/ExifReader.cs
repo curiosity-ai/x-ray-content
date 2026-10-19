@@ -1,17 +1,15 @@
 // Ported from Rust `crates/xberg/src/extraction/exif.rs`.
 //
-// The Rust code uses `nom-exif`; here we read EXIF via SixLabors.ImageSharp's ExifProfile.
+// The Rust code uses `nom-exif`; here the TIFF block is read by TiffExif.
 // The tag → field-name mapping mirrors the Rust `TAGS` table so the emitted `exif` map keys
-// match. Values are the profile value's display string.
-
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
+// match. Values are the entry's display string.
 
 namespace XRay.Content.Internal.Exif;
 
 internal static class ExifReader
 {
-    // Maps ImageSharp ExifTag numeric ids to the Rust field names.
-    // (ExifTag<T>.Number is the TIFF/EXIF tag id.)
+    // Maps TIFF/EXIF tag ids to the Rust field names. The GPS IFD numbers its tags from 1, so it
+    // has its own table (the GPS ids are all below 0x0100, which no main tag is).
     private static readonly Dictionary<ushort, string> TagNames = new()
     {
         // Identity / provenance
@@ -95,35 +93,21 @@ internal static class ExifReader
         [0x0202] = "ThumbnailLength",
     };
 
-    /// <summary>Build the EXIF tag → display-string map from an image's EXIF profile.
-    /// Returns an empty map when EXIF is absent.</summary>
-    public static Dictionary<string, string> Extract(ExifProfile? profile)
+    private static readonly Dictionary<ushort, string> GpsTagNames =
+        TagNames.Where(t => t.Key < 0x0100).ToDictionary(t => t.Key, t => t.Value);
+
+    /// <summary>Build the EXIF tag → display-string map from a TIFF-structured EXIF block (with or
+    /// without the leading <c>Exif\0\0</c>). Returns an empty map when EXIF is absent or unreadable.</summary>
+    public static Dictionary<string, string> Extract(ReadOnlySpan<byte> exif)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (profile is null) return map;
-
-        foreach (var value in profile.Values)
+        foreach (var value in TiffExif.Read(exif))
         {
-            if (!TagNames.TryGetValue((ushort)value.Tag, out var name)) continue;
-            string? text = FormatValue(value);
-            if (!string.IsNullOrEmpty(text) && !map.ContainsKey(name))
-                map[name] = text;
+            var names = value.Ifd == ExifIfd.Gps ? GpsTagNames : TagNames;
+            if (value.Ifd != ExifIfd.Gps && value.Tag < 0x0100) continue;
+            if (names.TryGetValue(value.Tag, out var name))
+                map.TryAdd(name, value.Text);
         }
         return map;
-    }
-
-    private static string? FormatValue(IExifValue value)
-    {
-        object? v = value.GetValue();
-        if (v is null) return null;
-
-        if (v is Array arr)
-        {
-            var parts = new List<string>(arr.Length);
-            foreach (var item in arr)
-                parts.Add(item?.ToString() ?? "");
-            return string.Join(" ", parts);
-        }
-        return v.ToString();
     }
 }

@@ -1,5 +1,3 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using XRay.Content.Core;
 using XRay.Content.Core.Ocr;
 using XRay.Content.Extractors;
@@ -571,10 +569,7 @@ public sealed class OcrProcessorTests
     /// </summary>
     private static byte[] Png(int width = 200, int height = 150)
     {
-        using var image = new Image<Rgb24>(width, height);
-        using var buffer = new MemoryStream();
-        image.SaveAsPng(buffer);
-        return buffer.ToArray();
+        return TestImages.Png(width, height);
     }
 
     /// <summary>

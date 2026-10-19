@@ -1,6 +1,5 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using XRay.Content.Internal.Onnx;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -104,7 +103,7 @@ internal sealed class YoloModel
     public string Name => _name;
 
     /// <summary>Detect layout regions in a page image.</summary>
-    public IReadOnlyList<LayoutDetection> Detect(Image<Rgb24> page, float threshold = DefaultThreshold) =>
+    public IReadOnlyList<LayoutDetection> Detect(RgbImage page, float threshold = DefaultThreshold) =>
         _variant == YoloVariant.Yolox
             ? DetectYolox(page, threshold)
             : DetectDecoded(page, threshold);
@@ -120,7 +119,7 @@ internal sealed class YoloModel
     /// followed by one score per class, which still has both a winner to pick and duplicates to
     /// remove.
     /// </remarks>
-    private IReadOnlyList<LayoutDetection> DetectDecoded(Image<Rgb24> page, float threshold)
+    private IReadOnlyList<LayoutDetection> DetectDecoded(RgbImage page, float threshold)
     {
         var input = Tensor.AllocateFloat(1, 3, _inputHeight, _inputWidth);
         LayoutPreprocessing.PreprocessRescale(page, input.Floats, _inputWidth);
@@ -191,7 +190,7 @@ internal sealed class YoloModel
     /// never go negative. Reading the row as a box gives a picture of tiny boxes clustered at
     /// the top left.
     /// </remarks>
-    private IReadOnlyList<LayoutDetection> DetectYolox(Image<Rgb24> page, float threshold)
+    private IReadOnlyList<LayoutDetection> DetectYolox(RgbImage page, float threshold)
     {
         var input = Tensor.AllocateFloat(1, 3, _inputHeight, _inputWidth);
         float scale = LayoutPreprocessing.PreprocessLetterbox(page, input.Floats, _inputWidth, _inputHeight);

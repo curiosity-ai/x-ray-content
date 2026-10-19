@@ -1,8 +1,5 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-
 using XRay.Content.Internal.Onnx;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -82,7 +79,7 @@ internal sealed class TableClassifier
     /// A model output that cannot be read at all falls back to wireless, matching upstream: the
     /// wireless variant is the safer default because it does not depend on gridlines being found.
     /// </remarks>
-    public TableType Classify(Image<Rgb24> tableImage) => ClassifyWithLogits(tableImage).Type;
+    public TableType Classify(RgbImage tableImage) => ClassifyWithLogits(tableImage).Type;
 
     /// <summary>
     /// Classify, also returning the two raw logits.
@@ -92,7 +89,7 @@ internal sealed class TableClassifier
     /// alone is a single bit and survives a fairly large numeric drift, so a probe that compares
     /// only the decision would pass on preprocessing that is merely close.
     /// </remarks>
-    internal (TableType Type, float RawWired, float RawWireless) ClassifyWithLogits(Image<Rgb24> tableImage)
+    internal (TableType Type, float RawWired, float RawWireless) ClassifyWithLogits(RgbImage tableImage)
     {
         var input = Tensor.AllocateFloat(1, 3, InputSize, InputSize);
         PreprocessLcnet(tableImage, input.Floats);
@@ -139,7 +136,7 @@ internal sealed class TableClassifier
     /// not interchangeable with a direct stretch to 224: it is what keeps a wide table's
     /// gridline spacing intact, which is the entire signal this model reads.
     /// </remarks>
-    internal static void PreprocessLcnet(Image<Rgb24> image, float[] destination, int offset = 0)
+    internal static void PreprocessLcnet(RgbImage image, float[] destination, int offset = 0)
     {
         int originalWidth = image.Width;
         int originalHeight = image.Height;
@@ -148,12 +145,7 @@ internal sealed class TableClassifier
         int newWidth = (int)MathF.Max(MathF.Round(originalWidth * scale, MidpointRounding.AwayFromZero), 1.0f);
         int newHeight = (int)MathF.Max(MathF.Round(originalHeight * scale, MidpointRounding.AwayFromZero), 1.0f);
 
-        using var resized = image.Clone(context => context.Resize(new ResizeOptions
-        {
-            Size = new Size(newWidth, newHeight),
-            Sampler = KnownResamplers.Triangle, // bilinear, matching image::imageops::Triangle
-            Mode = ResizeMode.Stretch,
-        }));
+        var resized = image.ResizeTriangle(newWidth, newHeight);
 
         int cropX = Math.Max(newWidth - InputSize, 0) / 2;
         int cropY = Math.Max(newHeight - InputSize, 0) / 2;

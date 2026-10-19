@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -25,14 +23,9 @@ internal static class LayoutPreprocessing
     /// </para>
     /// </remarks>
     internal static void PreprocessRescale(
-        Image<Rgb24> page, float[] destination, int targetSize, int offset = 0)
+        RgbImage page, float[] destination, int targetSize, int offset = 0)
     {
-        using var resized = page.Clone(context => context.Resize(new ResizeOptions
-        {
-            Size = new Size(targetSize, targetSize),
-            Sampler = KnownResamplers.Triangle, // bilinear, matching image::imageops::Triangle
-            Mode = ResizeMode.Stretch,
-        }));
+        var resized = page.ResizeTriangle(targetSize, targetSize);
 
         int plane = targetSize * targetSize;
         const float scale = 1f / 255f;
@@ -64,7 +57,7 @@ internal static class LayoutPreprocessing
     /// activation. Returns the scale ratio, which the caller needs to map detections back.
     /// </remarks>
     internal static float PreprocessLetterbox(
-        Image<Rgb24> page, float[] destination, int targetWidth, int targetHeight, int offset = 0)
+        RgbImage page, float[] destination, int targetWidth, int targetHeight, int offset = 0)
     {
         float originalWidth = page.Width;
         float originalHeight = page.Height;
@@ -72,12 +65,7 @@ internal static class LayoutPreprocessing
         int newWidth = (int)(originalWidth * scale);
         int newHeight = (int)(originalHeight * scale);
 
-        using var resized = page.Clone(context => context.Resize(new ResizeOptions
-        {
-            Size = new Size(Math.Max(newWidth, 1), Math.Max(newHeight, 1)),
-            Sampler = KnownResamplers.Triangle,
-            Mode = ResizeMode.Stretch,
-        }));
+        var resized = page.ResizeTriangle(Math.Max(newWidth, 1), Math.Max(newHeight, 1));
 
         int plane = targetHeight * targetWidth;
         // The pad value fills the whole canvas first, so the region the resized image does not

@@ -94,7 +94,7 @@ if (args.Length >= 2 && args[0] == "--dump-qr")
 // `tools/yolo-probe`, so the two can be diffed.
 if (args.Length >= 3 && args[0] == "--dump-yolo")
 {
-    using var page = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(args[1]);
+    var page = XRay.Content.Internal.Imaging.SkiaImages.DecodeRgb(File.ReadAllBytes(args[1]));
     var byVariant = new System.Text.Json.Nodes.JsonObject();
 
     for (int i = 2; i < args.Length; i++)
@@ -170,7 +170,7 @@ if (args.Length >= 3 && args[0] == "--dump-slanet")
     var pages = new System.Text.Json.Nodes.JsonArray();
     for (int i = 2; i < args.Length; i++)
     {
-        using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(args[i]);
+        var image = XRay.Content.Internal.Imaging.SkiaImages.DecodeRgb(File.ReadAllBytes(args[i]));
         var recognized = slanet.Recognize(image);
         var cells = new System.Text.Json.Nodes.JsonArray();
         foreach (var cell in recognized.Cells)
@@ -204,7 +204,7 @@ if (args.Length >= 3 && args[0] == "--dump-tatr")
     var pages = new System.Text.Json.Nodes.JsonArray();
     for (int i = 2; i < args.Length; i++)
     {
-        using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(args[i]);
+        var image = XRay.Content.Internal.Imaging.SkiaImages.DecodeRgb(File.ReadAllBytes(args[i]));
         var recognized = tatr.Recognize(image);
 
         static System.Text.Json.Nodes.JsonArray Render(
@@ -279,7 +279,7 @@ if (args.Length >= 3 && args[0] == "--dump-ppdoclayout")
     var pages = new System.Text.Json.Nodes.JsonArray();
     for (int i = 2; i < args.Length; i++)
     {
-        using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(args[i]);
+        var image = XRay.Content.Internal.Imaging.SkiaImages.DecodeRgb(File.ReadAllBytes(args[i]));
         var found = new System.Text.Json.Nodes.JsonArray();
         foreach (var d in layoutModel.Detect(image))
             found.Add(new System.Text.Json.Nodes.JsonObject
@@ -303,7 +303,7 @@ if (args.Length >= 3 && args[0] == "--dump-tablecls")
     var classified = new System.Text.Json.Nodes.JsonArray();
     for (int i = 2; i < args.Length; i++)
     {
-        using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(args[i]);
+        var image = XRay.Content.Internal.Imaging.SkiaImages.DecodeRgb(File.ReadAllBytes(args[i]));
         var (type, rawWired, rawWireless) = classifier.ClassifyWithLogits(image);
         classified.Add(new System.Text.Json.Nodes.JsonObject
         {

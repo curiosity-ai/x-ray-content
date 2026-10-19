@@ -1,8 +1,5 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-
 using XRay.Content.Internal.Onnx;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -105,7 +102,7 @@ internal sealed class SlanetModel
     }
 
     /// <summary>Recognise table structure from a cropped table image.</summary>
-    public SlanetResult Recognize(Image<Rgb24> tableImage)
+    public SlanetResult Recognize(RgbImage tableImage)
     {
         var input = Tensor.AllocateFloat(1, 3, InputSize, InputSize);
         PreprocessSlanet(tableImage, input.Floats);
@@ -251,18 +248,13 @@ internal sealed class SlanetModel
     /// is filled with the per-channel bias first and the resized image written over it. Padding
     /// with raw zeros would present mid-grey to the model instead of black.
     /// </remarks>
-    internal static void PreprocessSlanet(Image<Rgb24> image, float[] destination, int offset = 0)
+    internal static void PreprocessSlanet(RgbImage image, float[] destination, int offset = 0)
     {
         float scale = MathF.Min(InputSize / (float)image.Width, InputSize / (float)image.Height);
         int newWidth = (int)MathF.Max(MathF.Round(image.Width * scale, MidpointRounding.AwayFromZero), 1.0f);
         int newHeight = (int)MathF.Max(MathF.Round(image.Height * scale, MidpointRounding.AwayFromZero), 1.0f);
 
-        using var resized = image.Clone(context => context.Resize(new ResizeOptions
-        {
-            Size = new Size(newWidth, newHeight),
-            Sampler = KnownResamplers.Triangle, // bilinear, matching image::imageops::Triangle
-            Mode = ResizeMode.Stretch,
-        }));
+        var resized = image.ResizeTriangle(newWidth, newHeight);
 
         const float inv255 = 1.0f / 255.0f;
         float alphaB = inv255 / ImagenetStdBgr[0];

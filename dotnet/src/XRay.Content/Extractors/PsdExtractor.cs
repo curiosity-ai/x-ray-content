@@ -376,14 +376,7 @@ public sealed class PsdExtractor : IExtractor
     private static Dictionary<string, string> ExifOf(PsdDocument document)
     {
         if (document.GetImageResource(ExifResourceId) is not { Data.Length: > 0 } resource) return new();
-        try
-        {
-            return ExifReader.Extract(new SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifProfile(resource.Data.ToArray()));
-        }
-        catch (Exception e) when (e is ArgumentException or IndexOutOfRangeException or InvalidOperationException)
-        {
-            return new();
-        }
+        return ExifReader.Extract(resource.Data.ToArray());
     }
 
     private static string ColorModeName(PsdColorMode mode) => mode switch

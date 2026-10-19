@@ -1,7 +1,5 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-
 using XRay.Content.Internal.Onnx;
+using XRay.Content.Internal.Imaging;
 
 namespace XRay.Content.Internal.Layout;
 
@@ -102,7 +100,7 @@ internal sealed class PpDocLayoutV3Model
     }
 
     /// <summary>Detect layout regions in a page image.</summary>
-    public IReadOnlyList<LayoutDetection> Detect(Image<Rgb24> page, float threshold = DefaultThreshold) =>
+    public IReadOnlyList<LayoutDetection> Detect(RgbImage page, float threshold = DefaultThreshold) =>
         DetectBatch([page], threshold)[0];
 
     /// <summary>
@@ -129,7 +127,7 @@ internal sealed class PpDocLayoutV3Model
 
     /// <summary>Detect over several pages in one graph execution.</summary>
     public IReadOnlyList<IReadOnlyList<LayoutDetection>> DetectBatch(
-        IReadOnlyList<Image<Rgb24>> pages, float threshold = DefaultThreshold)
+        IReadOnlyList<RgbImage> pages, float threshold = DefaultThreshold)
     {
         if (EmptyBatchShortCircuit(pages.Count) is { } empty) return empty;
 
