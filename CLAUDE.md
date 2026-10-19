@@ -17,6 +17,19 @@ Rust work can be merged and the C# port re-synchronized.
 
 ---
 
+## Documentation lives in curiosity-ai/documentation
+
+The docs for X-Ray.Content are not in this repository. They are the `x-ray/content/` folder of
+[curiosity-ai/documentation](https://github.com/curiosity-ai/documentation) (clone: `/home/user/documentation`
+in agent sessions), published at <https://docs.curiosity.ai/x-ray/content/>.
+
+**A change to the public API, options, defaults, behavior, limits, licence, install steps or
+supported formats is not finished until that page is updated.** Open the documentation PR against
+`curiosity-ai/documentation` (never against this repository, an upstream, or a LibreOffice
+repository), link it from the code PR, and say in the code PR when no page needs to change. The
+`docs-site` skill in curiosity-ai/x-ray has the conventions: links carry the `/x-ray` prefix and
+samples use the real API.
+
 ## Scope
 
 **In scope — content extraction only:**
