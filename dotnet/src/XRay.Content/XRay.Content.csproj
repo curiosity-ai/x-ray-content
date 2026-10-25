@@ -55,10 +55,13 @@
   <ItemGroup>
     <!-- Pixel decoding only: the QR scan (opt-in) and the layout models' page loader. An image's
          dimensions, format and EXIF are read from its headers (Internal/Imaging/ImageHeader), so an
-         ordinary extraction never loads the native library. The native assets come with PaddleOCR. -->
-    <PackageReference Include="SkiaSharp" Version="4.150.1" />
-    <PackageReference Include="System.Numerics.Tensors" Version="10.0.11" />
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.0" />
+         ordinary extraction never loads the native library. A consumer that does reach it on Linux has
+         to supply SkiaSharp.NativeAssets.Linux.NoDependencies at this exact version: the managed
+         package pulls only the Win32 and macOS natives, and the versions arriving transitively
+         (PaddleOCR 3.119.0, PDFtoImage 4.150.1) do not satisfy it. -->
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="System.Numerics.Tensors" Version="10.0.14" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.14" />
     <!-- PSD/PSB structure and text; see XRayPsdVersion above. -->
     <PackageReference Include="X-Ray.Psd" Version="$(XRayPsdVersion)" />
     <!-- The optional OCR pass; see the OCR section of CLAUDE.md. `PaddleOCR` is a managed

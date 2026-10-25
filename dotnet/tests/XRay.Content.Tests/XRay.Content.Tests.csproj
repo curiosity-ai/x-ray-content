@@ -7,9 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
-    <PackageReference Include="xunit" Version="2.9.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <!-- The Linux natives are opt-in: managed SkiaSharp pulls only the Win32 and macOS ones, and the
+         only transitive source here is PDFtoImage, pinned a release behind. Without this the test host
+         loads libSkiaSharp 150.0 against managed 4.153.1 and every image test dies in
+         SkiaApi's type initializer. Keep the version equal to the SkiaSharp one in XRay.Content. -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
   </ItemGroup>
 
   <ItemGroup>
